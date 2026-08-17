@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule: { interval: "weekly" }
+    commit-message: { prefix: "ci" }
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule: { interval: "weekly" }
+    commit-message: { prefix: "deps" }
+    # torch and mlx are pinned deliberately and narrowly: a minor release can
+    # change numerics, and the certification is not yet automatic enough to
+    # catch that on a bot's PR. Bump them by hand, with a certification run.
+    ignore:
+      - dependency-name: "torch"
+      - dependency-name: "mlx"

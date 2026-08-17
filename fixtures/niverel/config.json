@@ -1,0 +1,32 @@
+{
+  "d_model": 768,
+  "d_state": 128,
+  "d_conv": 4,
+  "expand": 2,
+  "headdim": 64,
+  "ngroups": 1,
+  "chunk_size": 256,
+  "bias": false,
+  "conv_bias": true,
+  "d_ssm": null,
+  "D_has_hdim": false,
+  "rmsnorm": true,
+  "norm_before_gate": false,
+  "norm_epsilon": 1e-05,
+  "dt_limit": [
+    0.0,
+    "inf"
+  ],
+  "conv_init": null,
+  "A_init_range": [
+    1.0,
+    16.0
+  ],
+  "dt_min": 0.001,
+  "dt_max": 0.1,
+  "dt_init_floor": 0.0001,
+  "metadata": {
+    "source": "niverel-5b-v3-hnet-jepa-seed1337",
+    "note": "headdim/ngroups/chunk_size are never passed by Niverel, so upstream defaults apply"
+  }
+}

@@ -1,0 +1,81 @@
+# Sealed numerical tolerances.
+#
+# These are OBSERVED values, then sealed. The rule from brief section 11.3 is
+# absolute: an agent (or a human) must not widen a tolerance until a test
+# passes. If a measurement exceeds its band, that is a finding to report, not
+# a number to adjust.
+#
+# `observed` records what the certification run actually measured on the
+# reference hardware, so drift is visible without re-running anything. The
+# pass criterion is the allclose form:
+#
+#     |candidate - reference| <= atol + rtol * |reference|
+#
+# `max_rel_error` in a report is computed only over elements whose reference
+# magnitude exceeds `rel_floor`; below that, relative error is meaningless
+# noise (a reference value of 1e-9 makes any absolute difference look huge)
+# and reporting it would mislead rather than inform.
+
+schema_version: niverel-mamba-tolerances-v1
+
+sealed_on: 2026-08-17
+sealed_hardware: Apple M1, macOS 26.0.1, torch 2.13.0, mlx 0.32.0
+sealed_by: scripts/verify_release_assets.py + tests/certification
+
+classes:
+  cpu_float64:
+    atol: 1.0e-10
+    rtol: 1.0e-9
+    rel_floor: 1.0e-8
+    description: >-
+      Sequential oracle against the chunked implementation, both in float64 on
+      CPU. This is the tightest claim the package makes and the one every
+      other tolerance is ultimately anchored to.
+    observed:
+      chunked_vs_sequential_max_abs: 1.07e-14
+      forward_vs_step_max_abs: 1.6e-15
+      segmented_vs_separate_max_abs: 4.4e-16
+      upstream_ssd_minimal_max_abs: 3.6e-15
+
+  cpu_float32:
+    atol: 2.0e-5
+    rtol: 2.0e-4
+    rel_floor: 1.0e-4
+    description: Chunked against the sequential oracle, float32 on CPU.
+    observed:
+      chunked_vs_sequential_max_abs: 3.4e-6
+      chunked_vs_per_segment_max_abs: 3.8e-6
+
+  mps_float32:
+    atol: 1.0e-4
+    rtol: 1.0e-3
+    rel_floor: 1.0e-3
+    description: >-
+      torch-reference on MPS against torch-reference on CPU, both float32,
+      real Foundation V3 weights.
+    observed:
+      cpu_vs_mps_l96_max_abs: 4.6e-6
+      cpu_vs_mps_l8192_max_abs: 1.9e-5
+
+  mlx_float32:
+    atol: 1.0e-4
+    rtol: 1.0e-3
+    rel_floor: 1.0e-3
+    description: MLX against torch-reference CPU, float32, real V3 weights.
+    observed:
+      torch_vs_mlx_max_abs: 1.15e-5
+      mlx_chunked_vs_sequential_max_abs: 3.6e-6
+      mlx_forward_vs_step_max_abs: 8.6e-6
+
+  cuda_bfloat16:
+    atol: 2.0e-2
+    rtol: 2.0e-2
+    rel_floor: 1.0e-2
+    description: >-
+      cuda-reference in bfloat16 against torch-reference float32.
+      NOT YET MEASURED -- no NVIDIA GPU was available when this file was
+      sealed. These are the brief's starting values, carried unchanged, and
+      the cuda-reference backend is published as `experimental` precisely
+      because this row is unverified. certify-cuda-sm80.yml must replace the
+      `observed` block below before that status may change.
+    observed: null

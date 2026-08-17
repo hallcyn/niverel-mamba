@@ -1,0 +1,81 @@
+name: release
+
+# Ordered exactly as the brief specifies:
+#   build core -> test core -> build CUDA assets -> cold-install them ->
+#   certify on GPU -> final manifest -> GitHub Release -> PyPI ->
+#   cold-install from PyPI
+#
+# The ordering is the point: nothing is published before the thing that would
+# have caught it having been wrong has run.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      wheel_run_id:
+        description: "build-cuda-wheels run to certify and attach (omit to release core only)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --extra torch --extra dev
+      - run: uv run ruff check . && uv run mypy src
+      - run: uv run python scripts/make_golden_fixture.py
+      - run: uv run pytest -q
+      - run: uv run python -m build
+      - run: uv run twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with: { name: dist, path: dist/ }
+
+  certify-gpu:
+    # Skipped when no CUDA build was nominated. When it IS nominated, its
+    # success is what allows the wheels to be attached to the release.
+    needs: build-core
+    if: inputs.wheel_run_id != ''
+    uses: ./.github/workflows/certify-cuda-sm80.yml
+    with:
+      wheel_run_id: ${{ inputs.wheel_run_id }}
+    secrets: inherit
+
+  github-release:
+    needs: [build-core, certify-gpu]
+    if: always() && needs.build-core.result == 'success' && (needs.certify-gpu.result == 'success' || needs.certify-gpu.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: assemble and verify the release manifest
+        run: |
+          python scripts/verify_release_assets.py --wheelhouse artifacts --allow-empty
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/dist/*
+            artifacts/cuda-wheels-*/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+
+  publish-testpypi:
+    needs: github-release
+    uses: ./.github/workflows/publish-pypi.yml
+    with:
+      repository: testpypi
+    secrets: inherit
+
+  publish-pypi:
+    needs: publish-testpypi
+    uses: ./.github/workflows/publish-pypi.yml
+    with:
+      repository: pypi
+    secrets: inherit
