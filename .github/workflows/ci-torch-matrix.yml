@@ -1,0 +1,53 @@
+name: ci-torch-matrix
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-torch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-cpu:
+    name: py${{ matrix.python }} / torch ${{ matrix.torch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Combinations that genuinely cannot be installed are removed here
+      # explicitly rather than hidden behind continue-on-error. Torch 2.11 and
+      # 2.12 do not publish cp313 wheels, so those cells are absent by design.
+      matrix:
+        include:
+          - { python: "3.10", torch: "2.11.0" }
+          - { python: "3.11", torch: "2.11.0" }
+          - { python: "3.12", torch: "2.11.0" }
+          - { python: "3.10", torch: "2.12.1" }
+          - { python: "3.11", torch: "2.12.1" }
+          - { python: "3.12", torch: "2.12.1" }
+          - { python: "3.10", torch: "2.13.0" }
+          - { python: "3.11", torch: "2.13.0" }
+          - { python: "3.12", torch: "2.13.0" }
+          - { python: "3.13", torch: "2.13.0" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: install with a pinned torch (CPU index)
+        run: |
+          uv venv --python ${{ matrix.python }}
+          uv pip install "torch==${{ matrix.torch }}" --index-url https://download.pytorch.org/whl/cpu
+          uv pip install -e ".[dev]" einops
+      - name: build fixtures
+        run: uv run python scripts/make_golden_fixture.py
+      - name: tests
+        run: uv run pytest tests/unit tests/torch_reference tests/gradients tests/release -q
+      - name: certify the tiny and segmented fixtures
+        run: |
+          uv run niverel-mamba verify --fixture tiny
+          uv run niverel-mamba verify --fixture segmented

@@ -1,0 +1,129 @@
+name: ci-core
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-core-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - name: ruff
+        run: uv run ruff check .
+      - name: mypy
+        run: uv run mypy src
+
+  core-tests:
+    # The core package must be usable, and testable, with no framework at all.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - name: tests that need no framework
+        run: uv run pytest tests/unit tests/release -q
+      - name: importing must not pull in torch or mlx
+        run: |
+          uv run python -c "
+          import sys, niverel_mamba
+          assert 'torch' not in sys.modules, 'importing the package imported torch'
+          assert 'mlx' not in sys.modules, 'importing the package imported mlx'
+          print(niverel_mamba.__version__)
+          "
+      - name: doctor must work with no backend installed
+        run: uv run niverel-mamba doctor --json
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --extra dev
+      - name: build sdist and wheel
+        run: uv run python -m build
+      - name: the wheel must be py3-none-any
+        run: ls dist/ | grep -q 'py3-none-any.whl'
+      - name: twine check
+        run: uv run twine check dist/*
+      - name: the wheel must ship the weight contract
+        run: |
+          uv run python - <<'PY'
+          import zipfile, glob
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          assert any("_schemas/mamba2-upstream-2.3.2.post1.json" in n for n in names), names
+          print("contract present in", wheel)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  contract-drift:
+    # The weight contract is generated, never hand-edited. Regenerate it from
+    # the pinned upstream wheel and fail if the committed file has drifted.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --extra torch --extra dev
+      # The contract is derived from a mamba_ssm *wheel*, which is a 284 MB
+      # Linux/CUDA artefact that PyPI does not serve to this runner and that we
+      # deliberately do not commit. Downloading the sdist instead is useless
+      # here -- it cannot be imported without building against CUDA -- so this
+      # job only runs the real check when a wheel has actually been provided.
+      - name: look for a wheel to check against
+        id: wheel
+        run: |
+          if ls vendor/mamba_ssm-*.whl >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No mamba_ssm wheel in vendor/; contract drift is checked by the \
+            certify-cuda jobs and locally. Drop the pinned wheel into vendor/ to check it here."
+          fi
+      - name: verify the contract still matches upstream
+        if: steps.wheel.outputs.found == 'true'
+        run: uv run python scripts/extract_weight_contract.py --check
+      - name: the committed contract must at least be well formed
+        # Always runs: catches a hand-edited or truncated schemas/ file even
+        # when the upstream wheel is unavailable to diff against.
+        run: |
+          uv run python - <<'PY'
+          from niverel_mamba.schema import default_contract
+          from niverel_mamba import Mamba2Config
+          contract = default_contract()
+          assert contract.upstream_version == "2.3.2.post1", contract.upstream_version
+          expected = contract.expected(Mamba2Config(d_model=768, d_state=128, d_conv=4, expand=2))
+          assert expected["in_proj.weight"] == (3352, 768), expected
+          assert "init_states" not in expected
+          print(f"contract well formed: {len(expected)} tensors for the V3 configuration")
+          PY
+
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: required legal files
+        run: |
+          for f in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
+            test -s "$f" || { echo "::error::$f is missing or empty"; exit 1; }
+          done
+          grep -q "Apache License" LICENSE
+          grep -q "mamba-ssm" THIRD_PARTY_NOTICES.md
+          grep -q "MLX" THIRD_PARTY_NOTICES.md

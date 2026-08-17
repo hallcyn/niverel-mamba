@@ -1,0 +1,154 @@
+{
+  "schema_version": "niverel-mamba2-weights-v1",
+  "upstream_package": "mamba-ssm",
+  "upstream_version": "2.3.2.post1",
+  "key_order": [
+    "dt_bias",
+    "A_log",
+    "D",
+    "in_proj.weight",
+    "in_proj.bias",
+    "conv1d.weight",
+    "conv1d.bias",
+    "norm.weight",
+    "out_proj.weight",
+    "out_proj.bias"
+  ],
+  "reference_configuration": {
+    "name": "niverel-foundation-v3",
+    "source": "runtime_config.yaml of niverel-5b-v3-hnet-jepa-seed1337",
+    "config": {
+      "d_model": 768,
+      "d_state": 128,
+      "d_conv": 4,
+      "expand": 2,
+      "headdim": 64,
+      "ngroups": 1,
+      "chunk_size": 256,
+      "bias": false,
+      "conv_bias": true,
+      "d_ssm": null,
+      "D_has_hdim": false,
+      "rmsnorm": true,
+      "norm_before_gate": false,
+      "norm_epsilon": 1e-05,
+      "dt_limit": [
+        0.0,
+        "inf"
+      ],
+      "conv_init": null,
+      "A_init_range": [
+        1.0,
+        16.0
+      ],
+      "dt_min": 0.001,
+      "dt_max": 0.1,
+      "dt_init_floor": 0.0001
+    },
+    "derived": {
+      "d_inner": 1536,
+      "d_ssm": 1536,
+      "nheads": 24,
+      "conv_dim": 1792,
+      "d_in_proj": 3352,
+      "d_mlp": 0,
+      "norm_group_size": 1536
+    }
+  },
+  "tensors": {
+    "dt_bias": {
+      "shape": [
+        "nheads"
+      ],
+      "dtype": "float32",
+      "description": "Pre-softplus bias on the discretisation step, one per head."
+    },
+    "A_log": {
+      "shape": [
+        "nheads"
+      ],
+      "dtype": "float32",
+      "description": "Log of the negated state-decay rate; A = -exp(A_log), always in float32."
+    },
+    "D": {
+      "shape": [
+        "d_D"
+      ],
+      "dtype": "float32",
+      "description": "Skip-connection gain. Length nheads, or d_ssm when D_has_hdim."
+    },
+    "in_proj.weight": {
+      "shape": [
+        "d_in_proj",
+        "d_model"
+      ],
+      "dtype": "float32",
+      "description": "Fused input projection producing [z0, x0, z, xBC, dt] in that order."
+    },
+    "in_proj.bias": {
+      "shape": [
+        "d_in_proj"
+      ],
+      "dtype": "float32",
+      "required_if": "bias",
+      "description": "Present only when bias=True."
+    },
+    "conv1d.weight": {
+      "shape": [
+        "conv_dim",
+        1,
+        "d_conv"
+      ],
+      "dtype": "float32",
+      "description": "Depthwise causal conv over [x, B, C]; index d_conv-1 is the newest tap."
+    },
+    "conv1d.bias": {
+      "shape": [
+        "conv_dim"
+      ],
+      "dtype": "float32",
+      "required_if": "conv_bias",
+      "description": "Present only when conv_bias=True."
+    },
+    "norm.weight": {
+      "shape": [
+        "d_ssm"
+      ],
+      "dtype": "float32",
+      "required_if": "rmsnorm",
+      "description": "Gated RMSNorm gain, grouped by d_ssm // ngroups, eps=1e-5."
+    },
+    "out_proj.weight": {
+      "shape": [
+        "d_model",
+        "d_inner"
+      ],
+      "dtype": "float32",
+      "description": "Output projection back to d_model."
+    },
+    "out_proj.bias": {
+      "shape": [
+        "d_model"
+      ],
+      "dtype": "float32",
+      "required_if": "bias",
+      "description": "Present only when bias=True."
+    }
+  },
+  "provenance": {
+    "extracted_by": "scripts/extract_weight_contract.py",
+    "extracted_at_utc": "2026-08-17T16:56:07+00:00",
+    "niverel_mamba_commit": "1f595dc04b51922bd4b5f1fc9e59dff9cbdd8495",
+    "torch_version": "2.13.0",
+    "wheel_filename": "mamba_ssm-2.3.2.post1-cp312-cp312-linux_x86_64.whl",
+    "wheel_sha256": "0d262f59a4e84f9687328713310a70ea4c0a3e589d01a889b18f814088d5bee5",
+    "source_file_sha256": {
+      "mamba_ssm/__init__.py": "d96b346da56c3c63a32224b5ca1d5af97526c3c95af83496c21c71d51dc2a36c",
+      "mamba_ssm/modules/mamba2.py": "605e4439ff0baec8d8acaf4a191d9f0570eea9900065a065909124c472b08707",
+      "mamba_ssm/modules/ssd_minimal.py": "6442a9fe25a6792258df657392ab1fab4dd873ee777d9dd5783cc76030218e07",
+      "mamba_ssm/ops/triton/layernorm_gated.py": "eb6252e247b90f1c8a75946efbc1a221e0c4da701b6757ddae49f3495cf7a42f"
+    },
+    "verified_against_configurations": 9,
+    "note": "Shapes are symbolic and were verified against the genuine upstream module instantiated for every configuration in VERIFICATION_SWEEP. Mamba2 2.3.2.post1 has no init_states tensor; the gated norm eps is hard-coded to 1e-5 in Mamba2.__init__, not 1e-6."
+  }
+}

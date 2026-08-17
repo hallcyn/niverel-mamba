@@ -1,0 +1,94 @@
+name: certify-cuda-sm80
+
+# Runs on a self-hosted machine with a real GPU. These runners are expected to
+# be offline between certification campaigns; the job simply queues until one
+# comes back.
+#
+# Until this workflow has produced a report, the cuda-reference backend stays
+# published as `experimental` and the `cuda_bfloat16` tolerance class in
+# certification/tolerances.yaml stays marked unverified. Passing here is what
+# earns the promotion -- nothing else does.
+
+on:
+  workflow_dispatch:
+    inputs:
+      wheel_run_id:
+        description: "run id of the build-cuda-wheels workflow to certify"
+        required: true
+  workflow_call:
+    inputs:
+      wheel_run_id:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  certify:
+    runs-on: [self-hosted, linux, x64, cuda, sm80]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: report the GPU actually present
+        run: |
+          nvidia-smi
+          python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_capability(0))"
+
+      - name: refuse to run on the wrong architecture
+        run: |
+          python - <<'PY'
+          import sys, torch
+          major, minor = torch.cuda.get_device_capability(0)
+          actual = f"sm_{major}{minor}"
+          expected = "sm_80"
+          if actual != expected:
+              sys.exit(f"::error::this runner is {actual}, not {expected}; refusing to label the report")
+          print("architecture confirmed:", actual)
+          PY
+
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.wheel_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: cuda-wheels-*
+          path: wheelhouse
+          merge-multiple: true
+
+      - name: verify SHA-256 before installing
+        run: python scripts/verify_release_assets.py --wheelhouse wheelhouse
+
+      - name: cold install, no compilation
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --no-deps --only-binary :all: wheelhouse/*.whl
+          .venv/bin/pip install -e ".[dev]" einops
+          .venv/bin/niverel-mamba doctor
+
+      - name: build fixtures, including the real Foundation V3 block
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          .venv/bin/python scripts/make_golden_fixture.py
+          if [ -n "$HF_TOKEN" ]; then
+            .venv/bin/python scripts/make_golden_fixture.py --only-niverel
+          else
+            echo "::warning::HF_TOKEN not set; the real V3 fixture will be skipped by name"
+          fi
+
+      - name: cuda-reference parity
+        run: .venv/bin/python -m pytest tests/cuda tests/niverel -q
+
+      - name: certification report
+        run: |
+          .venv/bin/niverel-mamba verify --fixture segmented --device cuda \
+            --report certification-sm80.json
+          cat certification-sm80.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: certification-sm80
+          path: certification-sm80.json
