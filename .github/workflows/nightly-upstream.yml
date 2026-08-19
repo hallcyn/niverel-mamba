@@ -27,7 +27,7 @@ jobs:
       failed: ${{ job.status }}
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
       - run: |
           uv venv --python 3.12
           uv pip install "${{ matrix.spec }}" --index-url "${{ matrix.index }}" --prerelease allow
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --extra torch --extra dev
       - name: has upstream released a version we do not pin?
         run: |
