@@ -56,27 +56,67 @@ jobs:
 
   github-release:
     needs: [build-core, certify-gpu]
-    if: always() && needs.build-core.result == 'success' && (needs.certify-gpu.result == 'success' || needs.certify-gpu.result == 'skipped')
+    # `!cancelled()` rather than `always()`: a cancelled release must not go on
+    # to cut a GitHub Release.
+    if: >-
+      !cancelled()
+      && needs.build-core.result == 'success'
+      && (needs.certify-gpu.result == 'success' || needs.certify-gpu.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with: { path: artifacts }
-      - name: assemble and verify the release manifest
+
+      # Downloaded by name into a known directory rather than dumping every
+      # artifact into one tree and globbing it. The previous form attached
+      # nothing at all -- `artifacts/dist/*` matched no files -- and the release
+      # still reported success because unmatched patterns are not fatal.
+      - name: fetch the built distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - name: fetch certified CUDA wheels, if this release has any
+        if: needs.certify-gpu.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cuda-wheels-*
+          path: cuda-wheels
+          merge-multiple: true
+
+      - name: list exactly what will be attached
         run: |
-          python scripts/verify_release_assets.py --wheelhouse artifacts --allow-empty
+          echo "distributions:"
+          ls -l dist
+          echo "CUDA wheels:"
+          ls -l cuda-wheels 2>/dev/null || echo "  none (core-only release)"
+
+      - name: every CUDA asset must match the SHA-256 in its manifest
+        run: python scripts/verify_release_assets.py --wheelhouse cuda-wheels --allow-empty
+
+      - name: refuse to publish a release with no distributions
+        run: |
+          count=$(ls dist/*.whl dist/*.tar.gz 2>/dev/null | wc -l)
+          [ "$count" -ge 2 ] || { echo "::error::expected a wheel and an sdist, found $count"; exit 1; }
+
       - uses: softprops/action-gh-release@v3
         with:
           files: |
-            artifacts/dist/*
-            artifacts/cuda-wheels-*/*
+            dist/*
+            cuda-wheels/*
           generate_release_notes: true
           fail_on_unmatched_files: false
 
   publish-testpypi:
     needs: github-release
+    # `certify-gpu` is skipped for a core-only release, and GitHub propagates a
+    # skip transitively to every descendant that does not override `if`. The
+    # `always()` on github-release rescues that job only -- not its dependants.
+    # Without this line both publish jobs are silently skipped and the release
+    # reports success having published nothing.
+    if: "!cancelled() && needs.github-release.result == 'success'"
     # A called workflow can only ever DOWNGRADE the caller's permissions, so
     # `id-token: write` has to be granted here. Declaring it only inside
     # publish-pypi.yml leaves the OIDC token unavailable and Trusted Publishing
@@ -91,6 +131,12 @@ jobs:
 
   publish-pypi:
     needs: publish-testpypi
+    # `certify-gpu` is skipped for a core-only release, and GitHub propagates a
+    # skip transitively to every descendant that does not override `if`. The
+    # `always()` on github-release rescues that job only -- not its dependants.
+    # Without this line both publish jobs are silently skipped and the release
+    # reports success having published nothing.
+    if: "!cancelled() && needs.publish-testpypi.result == 'success'"
     # A called workflow can only ever DOWNGRADE the caller's permissions, so
     # `id-token: write` has to be granted here. Declaring it only inside
     # publish-pypi.yml leaves the OIDC token unavailable and Trusted Publishing

@@ -144,3 +144,65 @@ def test_release_publishes_to_testpypi_before_pypi():
     needs = jobs["publish-pypi"]["needs"]
     needs = [needs] if isinstance(needs, str) else needs
     assert "publish-testpypi" in needs
+
+
+def _needs(job: dict[str, Any]) -> list[str]:
+    needs = job.get("needs") or []
+    return [needs] if isinstance(needs, str) else list(needs)
+
+
+def test_descendants_of_skippable_jobs_declare_an_explicit_condition():
+    """A skip propagates transitively, and `always()` only rescues its own job.
+
+    This cost a release. `certify-gpu` is skipped for a core-only release.
+    `github-release` survived because it carries `if: always() && ...`. But
+    `publish-testpypi` and `publish-pypi` had no `if` of their own, so GitHub
+    skipped them too -- and the run still reported **success**, having created
+    an empty GitHub Release and published nothing to either index.
+
+    Any job downstream of one that can be skipped therefore has to state its
+    own condition in terms of `needs.<job>.result`.
+    """
+    for name, workflow in _workflows().items():
+        jobs = workflow["jobs"]
+        skippable = {
+            job_id for job_id, job in jobs.items()
+            if job.get("if") and "cancelled" not in str(job["if"])
+        }
+        if not skippable:
+            continue
+        # Walk the needs graph outwards from every skippable job.
+        tainted, frontier = set(), set(skippable)
+        while frontier:
+            tainted |= frontier
+            frontier = {
+                job_id for job_id, job in jobs.items()
+                if job_id not in tainted and set(_needs(job)) & tainted
+            }
+        problems = [
+            f"{name}:{job_id} depends (transitively) on a job that can be skipped "
+            f"but declares no `if`, so GitHub will skip it silently"
+            for job_id in sorted(tainted - skippable)
+            if "needs." not in str(jobs[job_id].get("if", ""))
+        ]
+        assert not problems, "\n".join(problems)
+
+
+def test_nothing_publishes_on_a_cancelled_run():
+    """`always()` would keep publishing after you hit cancel. `!cancelled()` does not."""
+    jobs = _workflows()["release.yml"]["jobs"]
+    for job_id in ("github-release", "publish-testpypi", "publish-pypi"):
+        condition = str(jobs[job_id].get("if", ""))
+        assert "cancelled" in condition, f"{job_id} must guard against cancellation"
+        assert "always()" not in condition, f"{job_id} must not use always()"
+
+
+def test_the_release_refuses_to_ship_without_distributions():
+    """An empty release must fail loudly.
+
+    `fail_on_unmatched_files: false` means a broken glob attaches nothing and
+    still reports success -- which is exactly what happened.
+    """
+    steps = _workflows()["release.yml"]["jobs"]["github-release"]["steps"]
+    guards = [s for s in steps if "expected a wheel and an sdist" in str(s.get("run", ""))]
+    assert guards, "github-release must verify it actually has distributions to attach"
