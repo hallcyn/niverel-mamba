@@ -89,6 +89,88 @@ against those exact artefacts on real hardware. Until then the manifest carries
 `certification.status: uncertified` and `cuda-reference` is published as
 `experimental`.
 
+## Certifying the CUDA backend on rented hardware
+
+`cuda-reference` stays `experimental` until a GPU has actually run it. Two
+things are worth separating, because conflating them wastes money.
+
+**Building needs no GPU.** `nvcc` and the toolkit suffice, which is why
+`build-cuda-wheels.yml` compiles in Docker on free GitHub runners. Never pay
+GPU-hours to compile.
+
+**Certifying needs the exact architecture.** A wheel built with
+`TORCH_CUDA_ARCH_LIST="8.0;9.0"` contains cubins for sm_80 and sm_90 and
+nothing else. It will not start on anything else:
+
+```
+no kernel image is available for execution on the device
+```
+
+So an Ada card (sm_89: RTX 4090, L40S, RTX 2000 Ada) cannot certify these
+wheels, however capable it is. sm_80 means an A100; sm_90 means an H100. A
+certification run is roughly fifteen minutes, so renting one of each costs
+about a dollar.
+
+### Renting a pod
+
+On RunPod, pick the **PyTorch 2.8.0** template
+(`runpod/pytorch:...-cu1281-torch280-ubuntu2404`). It is the only one of the
+offered templates on Ubuntu 24.04, hence the only one with **Python 3.12** —
+and our wheels are tagged `cp312`, so on the py3.11 and py3.10 templates they
+simply refuse to install. Its CUDA 12.8.1 also matches the cu128 reference.
+The template's preinstalled torch is irrelevant; we install our own from the
+pinned index.
+
+### Registering it as a runner
+
+`certify-cuda-sm80.yml` and `certify-cuda-sm90.yml` already target
+`[self-hosted, linux, x64, cuda, sm80]` and `sm90`, so a pod carrying those
+labels picks the job up with no workflow change.
+
+```bash
+# On your machine: mint a short-lived registration token.
+gh api -X POST repos/hallcyn/niverel-mamba/actions/runners/registration-token --jq .token
+
+# On the pod. RunPod containers run as root, which the runner refuses by
+# default; the env var is the sanctioned override.
+export RUNNER_ALLOW_RUNASROOT=1
+mkdir -p /actions-runner && cd /actions-runner
+LATEST=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | grep -oP '"tag_name": "v\K[^"]+')
+curl -sL -o runner.tar.gz \
+  "https://github.com/actions/runner/releases/download/v${LATEST}/actions-runner-linux-x64-${LATEST}.tar.gz"
+tar xzf runner.tar.gz
+./config.sh --url https://github.com/hallcyn/niverel-mamba \
+  --token <TOKEN> --labels self-hosted,linux,x64,cuda,sm80 \
+  --ephemeral --unattended --name runpod-a100
+./run.sh
+```
+
+Then dispatch `certify-cuda-sm80` with the `build-cuda-wheels` run id to
+certify. The job refuses to run if the GPU it lands on is not the architecture
+the workflow claims, so a mislabelled pod fails loudly rather than producing a
+report labelled `sm_80` from something else.
+
+### Why `--ephemeral` is not optional here
+
+**This repository is public.** GitHub advises against self-hosted runners on
+public repositories, because a pull request can otherwise run arbitrary code on
+your machine. Two things keep this safe, and both must stay true:
+
+* the certification workflows trigger only on `workflow_dispatch` and
+  `workflow_call` — **never** `pull_request`. `tests/release/test_workflows.py`
+  is the place to add a guard if that is ever tempting to change;
+* `--ephemeral` retires the runner after one job, so nothing persists between
+  runs. Destroy the pod afterwards.
+
+### Afterwards
+
+A passing report is what promotes the backend. Until then, and this is
+enforced by the tests rather than by good intentions: the binary manifest
+carries `certification.status: uncertified`, `cuda-reference` is published as
+`experimental`, and the `cuda_bfloat16` tolerance class in `tolerances.yaml`
+carries the brief's starting values with `observed: null`. Replace that block
+with the measured numbers, and only then change the published status.
+
 ## Version numbering
 
 * **MAJOR** — the public API or the weight contract breaks

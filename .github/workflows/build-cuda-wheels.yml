@@ -9,9 +9,11 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "which build target to run (all, torch211-cu128, torch212-cu130, torch213-cu130)"
+        description: "which build target to run"
         required: false
-        default: "all"
+        default: torch211-cu128
+        type: choice
+        options: [torch211-cu128, torch212-cu130, torch213-cu130, all]
   push:
     branches: [main]
     paths:
@@ -23,30 +25,39 @@ permissions:
   contents: read
 
 jobs:
+  # The `target` input was previously declared and then ignored, so every
+  # dispatch compiled all three runtimes whatever you asked for. Each target
+  # builds causal-conv1d and mamba-ssm for two GPU architectures -- hours of
+  # nvcc -- so selecting one matters both for iterating and for staying inside
+  # a job's six-hour ceiling. The matrix lives in .github/cuda-targets.json so
+  # there is exactly one place to change it.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: select
+        env:
+          TARGET: ${{ inputs.target || 'all' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, pathlib, sys
+          every = json.loads(pathlib.Path(".github/cuda-targets.json").read_text())["targets"]
+          target = os.environ["TARGET"]
+          chosen = every if target == "all" else [t for t in every if t["name"] == target]
+          if not chosen:
+              sys.exit(f"unknown target {target!r}; known: {[t['name'] for t in every]}")
+          print("matrix=" + json.dumps({"include": chosen}))
+          PY
+          echo "selected:"; cat "$GITHUB_OUTPUT"
+
   build:
+    needs: plan
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: torch211-cu128
-            dockerfile: docker/torch211-cu128.Dockerfile
-            torch: "2.11.0"
-            cuda: "12.8"
-            python_tag: cp312
-            arch_list: "8.0;9.0"
-          - name: torch212-cu130
-            dockerfile: docker/torch212-cu130.Dockerfile
-            torch: "2.12.1"
-            cuda: "13.0"
-            python_tag: cp312
-            arch_list: "8.0;9.0"
-          - name: torch213-cu130
-            dockerfile: docker/torch213-cu130.Dockerfile
-            torch: "2.13.0"
-            cuda: "13.0"
-            python_tag: cp312
-            arch_list: "8.0;9.0"
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
 
@@ -93,11 +104,13 @@ jobs:
 
   cold-install:
     # A wheel that cannot be installed into a clean environment is not a wheel.
-    needs: build
+    # Mirrors the same selected matrix, so building one target does not fail on
+    # artefacts the other two never produced.
+    needs: [plan, build]
     runs-on: ubuntu-latest
     strategy:
-      matrix:
-        name: [torch211-cu128, torch212-cu130, torch213-cu130]
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
