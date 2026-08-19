@@ -48,7 +48,7 @@ jobs:
             python_tag: cp312
             arch_list: "8.0;9.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: free disk space
         run: |
@@ -99,7 +99,7 @@ jobs:
       matrix:
         name: [torch211-cu128, torch212-cu130, torch213-cu130]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: cuda-wheels-${{ matrix.name }}

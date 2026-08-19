@@ -42,7 +42,7 @@ jobs:
     env:
       TORCH_VERSION: "2.13.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -88,7 +88,7 @@ jobs:
     if: vars.HAS_SELF_HOSTED_MAC == 'true'
     runs-on: [self-hosted, macos, arm64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
       - run: |
           uv venv --python 3.12

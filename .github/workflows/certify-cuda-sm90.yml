@@ -30,7 +30,7 @@ jobs:
     runs-on: [self-hosted, linux, x64, cuda, sm90]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: report the GPU actually present
         run: |

@@ -16,7 +16,7 @@ jobs:
   lint-and-types:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -30,7 +30,7 @@ jobs:
     # The core package must be usable, and testable, with no framework at all.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -51,7 +51,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --extra dev
       - name: build sdist and wheel
@@ -79,7 +79,7 @@ jobs:
     # the pinned upstream wheel and fail if the committed file has drifted.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --extra torch --extra dev
       # The contract is derived from a mamba_ssm *wheel*, which is a 284 MB
@@ -118,7 +118,7 @@ jobs:
   licenses:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: required legal files
         run: |
           for f in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
