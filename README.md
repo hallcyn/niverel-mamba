@@ -277,6 +277,10 @@ The sequential oracle in `torch_ops/ssd_sequential.py` is the source of truth fo
 numerical test. It is slow by design and is never to be deleted, however fast the chunked
 path becomes.
 
+## Releasing
+
+See `RELEASING.md`.
+
 ## Licence
 
 Apache-2.0. See `LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES.md`.

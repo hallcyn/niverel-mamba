@@ -69,7 +69,7 @@ def mamba_kwargs_to_config(**kwargs: Any) -> Mamba2Config:
 
 
 def build_mamba2(config: Mamba2Config, backend: str = "auto", **kwargs: Any) -> Any:
-    """The factory brief section 16 asks for.
+    """The factory Niverel's H-Net swaps behind.
 
     Returns a module whose ``state_dict`` is identical either way, so the
     choice of backend never leaks into a checkpoint.

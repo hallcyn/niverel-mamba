@@ -1,4 +1,4 @@
-"""Strict loading: every refusal mode of brief section 3.2."""
+"""Strict loading: every refusal mode of the weight contract."""
 
 from __future__ import annotations
 

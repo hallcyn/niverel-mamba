@@ -1,6 +1,6 @@
 """Backend registry and resolution.
 
-Two rules govern everything here, both from brief section 3.3:
+Two rules govern everything here:
 
 1. **An explicit request never degrades.** ``backend="cuda-reference"`` on a
    machine without the wheel raises :class:`BackendUnavailableError`. It does

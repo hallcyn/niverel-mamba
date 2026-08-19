@@ -115,7 +115,7 @@ def test_forward_matches_concat_step(grouped_config):
 def test_weight_round_trip_is_byte_identical(grouped_config):
     """canonical -> MLX -> canonical must reproduce identical hashes.
 
-    Brief section 3.2 requires the MLX conversion to be reversible, and
+    The MLX conversion must be reversible, and
     'reversible' means the bytes come back, not that they come back close.
     """
     from niverel_mamba.weights import state_dict_digest

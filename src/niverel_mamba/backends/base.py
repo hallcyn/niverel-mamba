@@ -45,7 +45,7 @@ class Backend(ABC):
         """Advance one timestep, returning ``(y_t, new_state)``."""
 
     def identity(self, device: str | None = None) -> dict[str, Any]:
-        """Self-description, in the shape brief section 3.3 specifies."""
+        """Self-description: what is running, and how far it has been certified."""
         return {
             "backend": self.name,
             "framework": self.framework,

@@ -1,6 +1,6 @@
 # Golden fixtures
 
-Three tiers, matching brief section 11.1.
+Three tiers.
 
 | fixture | shape | purpose |
 |---|---|---|

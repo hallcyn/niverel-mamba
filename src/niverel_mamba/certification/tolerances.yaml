@@ -1,6 +1,6 @@
 # Sealed numerical tolerances.
 #
-# These are OBSERVED values, then sealed. The rule from brief section 11.3 is
+# These are OBSERVED values, then sealed. The rule is
 # absolute: an agent (or a human) must not widen a tolerance until a test
 # passes. If a measurement exceeds its band, that is a finding to report, not
 # a number to adjust.

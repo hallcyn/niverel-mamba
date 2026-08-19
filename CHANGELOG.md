@@ -17,7 +17,7 @@ versioning follows the scheme in the project brief:
   with `ModuleNotFoundError: numpy`. `build_parser()` imports every subcommand
   so `--help` can list them, so `verify`'s transitive numpy import was paid for
   by `doctor` and `inspect` too. numpy is now a core dependency (certification
-  utilities are core content per brief section 13, and both `compare()` and
+  utilities are part of the core surface, and both `compare()` and
   `tensor_digest()` need it), and `verify` defers its heavy imports so the
   diagnostic commands stay usable in a partially-installed environment.
 * `niverel-mamba verify` without PyTorch printed a raw traceback instead of a

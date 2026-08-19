@@ -47,7 +47,7 @@ class BackendUnavailableError(BackendError):
 
     This is raised -- never silently downgraded -- when the caller asks for a
     specific backend (for example ``backend="cuda-reference"``) and the
-    required wheel, framework or device is missing. Brief section 3.3.
+    required wheel, framework or device is missing.
     """
 
 
@@ -87,7 +87,7 @@ class WeightContractError(NiverelMambaError):
     Loading is always equivalent to ``load_state_dict(..., strict=True)``:
     a missing key, an unexpected key, a differing shape, an incompatible
     configuration, an unknown contract version, or an undocumented implicit
-    conversion are all refused. Brief section 3.2.
+    conversion are all refused.
     """
 
 
