@@ -181,7 +181,7 @@ def create(
     repo_url: str,
     image: str = DEFAULT_IMAGE,
     volume_gb: int = 20,
-    disk_gb: int = 40,
+    disk_gb: int = 80,
     country_codes: list[str] | None = None,
 ) -> dict[str, Any]:
     name = pod_name(arch, run_id)
@@ -284,7 +284,7 @@ def main() -> int:
     make.add_argument("--repo-url", required=True)
     make.add_argument("--image", default=DEFAULT_IMAGE)
     make.add_argument("--volume-gb", type=int, default=20)
-    make.add_argument("--disk-gb", type=int, default=40)
+    make.add_argument("--disk-gb", type=int, default=80)
     make.add_argument("--countries", default="US")
     make.add_argument("--wait", action="store_true")
 
