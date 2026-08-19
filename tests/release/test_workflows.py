@@ -519,3 +519,35 @@ def test_certification_proves_the_backend_imports_in_a_fresh_process():
     assert script.index(probe) < script.index("-m pytest"), (
         "the fresh-process import must run before pytest, which can poison sys.modules"
     )
+
+
+def test_jobs_using_a_local_action_do_not_check_out_an_older_ref():
+    """A local composite action is resolved from the working directory.
+
+    The workflow file itself comes from the ref the run was started on, but
+    `uses: ./.github/actions/...` is read from whatever `checkout` left on disk.
+    Pinning that checkout to the tag being released therefore breaks the moment
+    the tag predates the action:
+
+        Can't find 'action.yml' ... under .github/actions/collect-distributions
+
+    which is how re-publishing v0.1.0 failed. Jobs that use a local action must
+    check out the ref the workflow came from, and take the thing they are
+    actually publishing from artifacts or release assets instead.
+    """
+    problems = []
+    for name, workflow in _workflows().items():
+        for job_id, job in workflow["jobs"].items():
+            steps = job.get("steps") or []
+            if not any(str(s.get("uses", "")).startswith("./.github/actions/") for s in steps):
+                continue
+            for step in steps:
+                if "actions/checkout" not in str(step.get("uses", "")):
+                    continue
+                ref = str((step.get("with") or {}).get("ref", ""))
+                if "inputs.tag" in ref:
+                    problems.append(
+                        f"{name}:{job_id} uses a local action but checks out {ref}, "
+                        f"which may predate that action"
+                    )
+    assert not problems, "\n".join(problems)

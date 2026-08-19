@@ -220,9 +220,14 @@ jobs:
       contents: read
       id-token: write        # the only credential used; there is no token
     steps:
+      # Deliberately NOT `ref: inputs.tag`. This checkout exists only to provide
+      # the composite action below; what gets published comes from the run's
+      # artifact or from the release's own assets, never from this tree. Pinning
+      # it to the tag means an older tag checks out a tree that predates the
+      # action, and the job dies with "Can't find 'action.yml' ... under
+      # .github/actions/collect-distributions" -- which is exactly what happened
+      # re-publishing v0.1.0.
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.tag || github.ref }}
       - uses: ./.github/actions/collect-distributions
         with:
           publish_only: ${{ inputs.publish_only }}
@@ -252,9 +257,14 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # Deliberately NOT `ref: inputs.tag`. This checkout exists only to provide
+      # the composite action below; what gets published comes from the run's
+      # artifact or from the release's own assets, never from this tree. Pinning
+      # it to the tag means an older tag checks out a tree that predates the
+      # action, and the job dies with "Can't find 'action.yml' ... under
+      # .github/actions/collect-distributions" -- which is exactly what happened
+      # re-publishing v0.1.0.
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.tag || github.ref }}
       - uses: ./.github/actions/collect-distributions
         with:
           publish_only: ${{ inputs.publish_only }}

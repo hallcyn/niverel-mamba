@@ -92,6 +92,11 @@ Instead dispatch `release.yml` on the same tag with **publish_only** ticked:
 $ gh workflow run release.yml -f tag=v0.1.0 -f publish_only=true
 ```
 
+Dispatch it from the default branch, which is where it runs from by default.
+The workflow and the composite action it uses are read from the ref the run
+starts on, while `tag` only decides which release's assets are published -- so
+re-publishing an old tag does not require that tag to contain any of this.
+
 Everything up to and including `github-release` is skipped. The distributions
 are taken from the release assets rather than rebuilt, and before anything is
 uploaded the certification reports attached to that release are re-read and
