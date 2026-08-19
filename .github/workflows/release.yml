@@ -58,7 +58,7 @@ jobs:
       - name: assemble and verify the release manifest
         run: |
           python scripts/verify_release_assets.py --wheelhouse artifacts --allow-empty
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/dist/*
