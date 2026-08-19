@@ -1,21 +1,32 @@
 name: release
 
-# Ordered exactly as the brief specifies:
-#   build core -> test core -> build CUDA assets -> cold-install them ->
-#   certify on GPU -> final manifest -> GitHub Release -> PyPI ->
-#   cold-install from PyPI
+# One tag, one release. Push `v0.1.0` and everything below happens in order,
+# with a single human decision in the middle.
 #
-# The ordering is the point: nothing is published before the thing that would
-# have caught it having been wrong has run.
+#   build-core       tests, sdist and wheel                    ~2 min
+#   build-cuda       three CUDA runtimes, in parallel          ~70 min
+#   certify-sm80     on a RunPod A100, after your approval     ~20 min
+#   certify-sm90     on a RunPod H100, after your approval     ~20 min
+#   github-release   the release, with every artefact attached
+#   publish-testpypi TestPyPI, then a cold install from it
+#   publish-pypi     PyPI, gated by its own environment
+#
+# The ordering is the safety property: nothing is published before the thing
+# that would have caught it wrong has run. Certification failing stops the
+# release outright -- a version number on PyPI can never be reused, and an
+# uncertified CUDA wheel must never reach a user.
+#
+# GPU cost is bounded by approval on the `gpu` environment, a hard timeout on
+# each certification job, and a guard that fails if any pod is left running.
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
-      wheel_run_id:
-        description: "build-cuda-wheels run to certify and attach (omit to release core only)"
-        required: false
+      tag:
+        description: "existing tag to release, e.g. v0.1.0"
+        required: true
 
 permissions:
   contents: read
@@ -25,6 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: astral-sh/setup-uv@v10.0.1
       - run: uv sync --extra torch --extra dev
       - run: uv run ruff check . && uv run mypy src
@@ -35,63 +48,84 @@ jobs:
       - uses: actions/upload-artifact@v7
         with: { name: dist, path: dist/ }
 
-  certify-gpu:
-    # Skipped when no CUDA build was nominated. When it IS nominated, its
-    # success is what allows the wheels to be attached to the release.
+  build-cuda:
     needs: build-core
-    if: inputs.wheel_run_id != ''
-    # certify-cuda-sm80.yml needs `actions: read` to download artefacts from
-    # the nominated build run. A caller must grant everything the callee
-    # requests, and this is validated when the FILE is parsed -- the `if:`
-    # above does not save you. Getting it wrong makes the whole release
-    # workflow refuse to start with "requesting 'actions: read', but is only
-    # allowed 'actions: none'".
+    uses: ./.github/workflows/build-cuda-wheels.yml
+    permissions:
+      contents: read
+    with:
+      target: all
+    secrets: inherit
+
+  certify-sm80:
+    needs: build-cuda
+    uses: ./.github/workflows/certify-cuda.yml
     permissions:
       contents: read
       actions: read
-    uses: ./.github/workflows/certify-cuda-sm80.yml
+      # certify-cuda mints a runner registration token, which is a repository
+      # administration call. A callee can only downgrade what the caller
+      # grants, so it has to be granted here.
+      administration: write
     with:
-      wheel_run_id: ${{ inputs.wheel_run_id }}
+      arch: sm80
+    secrets: inherit
+
+  certify-sm90:
+    # Deliberately after sm80 rather than beside it: two GPUs billing at once
+    # for no gain, and if sm80 already found a regression there is nothing to
+    # learn from paying for an H100 to find the same one.
+    needs: certify-sm80
+    uses: ./.github/workflows/certify-cuda.yml
+    permissions:
+      contents: read
+      actions: read
+      # certify-cuda mints a runner registration token, which is a repository
+      # administration call. A callee can only downgrade what the caller
+      # grants, so it has to be granted here.
+      administration: write
+    with:
+      arch: sm90
     secrets: inherit
 
   github-release:
-    needs: [build-core, certify-gpu]
-    # `!cancelled()` rather than `always()`: a cancelled release must not go on
-    # to cut a GitHub Release.
-    if: >-
-      !cancelled()
-      && needs.build-core.result == 'success'
-      && (needs.certify-gpu.result == 'success' || needs.certify-gpu.result == 'skipped')
+    needs: [build-core, build-cuda, certify-sm80, certify-sm90]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
-      # Downloaded by name into a known directory rather than dumping every
-      # artifact into one tree and globbing it. The previous form attached
-      # nothing at all -- `artifacts/dist/*` matched no files -- and the release
-      # still reported success because unmatched patterns are not fatal.
+      # By name into known directories rather than one tree and a glob: an
+      # earlier version attached nothing at all because `artifacts/dist/*`
+      # matched no files, and unmatched patterns are not fatal.
       - name: fetch the built distributions
         uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist
 
-      - name: fetch certified CUDA wheels, if this release has any
-        if: needs.certify-gpu.result == 'success'
+      - name: fetch the certified CUDA wheels
         uses: actions/download-artifact@v8
         with:
           pattern: cuda-wheels-*
           path: cuda-wheels
           merge-multiple: true
 
+      - name: fetch the certification reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: certification-*
+          path: certification
+          merge-multiple: true
+
       - name: list exactly what will be attached
         run: |
-          echo "distributions:"
-          ls -l dist
-          echo "CUDA wheels:"
-          ls -l cuda-wheels 2>/dev/null || echo "  none (core-only release)"
+          echo "distributions:"; ls -l dist
+          echo "CUDA wheels:";   ls -l cuda-wheels
+          echo "reports:";       ls -l certification
 
       - name: every CUDA asset must match the SHA-256 in its manifest
         run: python scripts/verify_release_assets.py --wheelhouse cuda-wheels --allow-empty
@@ -101,26 +135,43 @@ jobs:
           count=$(ls dist/*.whl dist/*.tar.gz 2>/dev/null | wc -l)
           [ "$count" -ge 2 ] || { echo "::error::expected a wheel and an sdist, found $count"; exit 1; }
 
+      - name: every certification report must have passed
+        # The reports are the evidence that the attached wheels ran. Attaching
+        # a wheel whose report says `passed: false` would be exactly the
+        # unproven claim this project refuses to make.
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          reports = sorted(pathlib.Path("certification").glob("*.json"))
+          if not reports:
+              sys.exit("::error::no certification report; refusing to attach CUDA wheels")
+          for path in reports:
+              data = json.loads(path.read_text())
+              status = "passed" if data.get("passed") else "FAILED"
+              print(f"{path.name}: {status} "
+                    f"({data['candidate_backend']} vs {data['reference_backend']}, "
+                    f"max_abs={data['max_abs_error']:.3e})")
+              if not data.get("passed"):
+                  sys.exit(f"::error::{path.name} did not pass")
+          PY
+
       - uses: softprops/action-gh-release@v3
         with:
+          # Explicit, because the two entry points disagree about `github.ref`:
+          # a tag push gives the tag, a workflow_dispatch gives the branch.
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             dist/*
             cuda-wheels/*
+            certification/*
           generate_release_notes: true
           fail_on_unmatched_files: false
 
   publish-testpypi:
     needs: github-release
-    # `certify-gpu` is skipped for a core-only release, and GitHub propagates a
-    # skip transitively to every descendant that does not override `if`. The
-    # `always()` on github-release rescues that job only -- not its dependants.
-    # Without this line both publish jobs are silently skipped and the release
-    # reports success having published nothing.
-    if: "!cancelled() && needs.github-release.result == 'success'"
-    # A called workflow can only ever DOWNGRADE the caller's permissions, so
-    # `id-token: write` has to be granted here. Declaring it only inside
-    # publish-pypi.yml leaves the OIDC token unavailable and Trusted Publishing
-    # fails with "unable to get ACTIONS_ID_TOKEN_REQUEST_URL".
+    # A called workflow can only downgrade the caller's permissions, so
+    # `id-token: write` has to be granted here; declaring it only inside
+    # publish-pypi.yml leaves Trusted Publishing without a token.
     permissions:
       contents: read
       id-token: write
@@ -131,16 +182,6 @@ jobs:
 
   publish-pypi:
     needs: publish-testpypi
-    # `certify-gpu` is skipped for a core-only release, and GitHub propagates a
-    # skip transitively to every descendant that does not override `if`. The
-    # `always()` on github-release rescues that job only -- not its dependants.
-    # Without this line both publish jobs are silently skipped and the release
-    # reports success having published nothing.
-    if: "!cancelled() && needs.publish-testpypi.result == 'success'"
-    # A called workflow can only ever DOWNGRADE the caller's permissions, so
-    # `id-token: write` has to be granted here. Declaring it only inside
-    # publish-pypi.yml leaves the OIDC token unavailable and Trusted Publishing
-    # fails with "unable to get ACTIONS_ID_TOKEN_REQUEST_URL".
     permissions:
       contents: read
       id-token: write

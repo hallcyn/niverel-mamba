@@ -1,24 +1,51 @@
 # Releasing
 
-`niverel-mamba` publishes through **PyPI Trusted Publishing** (OIDC). There is
-no PyPI token in this repository, in its secrets, or on any maintainer's
-machine, and there is not meant to be one: a token is a long-lived credential
-that can be exfiltrated, whereas an OIDC exchange is scoped to one workflow run
-of one repository.
+Push a tag. That is the whole procedure.
+
+```bash
+git tag -a v0.1.0 -m "niverel-mamba 0.1.0"
+git push origin v0.1.0
+```
+
+`release.yml` then runs, in order:
+
+| stage | what it does | roughly |
+|---|---|---|
+| `build-core` | ruff, mypy, the full suite, sdist and wheel, `twine check` | 2 min |
+| `build-cuda` | three CUDA runtimes, in parallel | 70 min |
+| `certify-sm80` | starts the A100 pod, certifies, stops it | 20 min |
+| `certify-sm90` | the same on the H100 pod | 20 min |
+| `github-release` | attaches distributions, CUDA wheels and reports | |
+| `publish-testpypi` | TestPyPI, then a cold install from it | |
+| `publish-pypi` | PyPI | |
+
+**You approve once**, when the first GPU is about to start. Everything before
+that is free.
+
+The ordering is the safety property: nothing is published before the thing that
+would have caught it wrong has run. Certification failing stops the release
+outright — a version number on PyPI can never be reused, and an uncertified
+CUDA wheel must never reach a user. `github-release` additionally reads every
+certification report and refuses to attach anything if one says
+`passed: false`.
+
+To release an existing tag without re-tagging, dispatch `release.yml` and give
+it the tag; every job then builds that ref rather than whatever `main` happens
+to be.
+
+---
 
 ## One-time setup
 
-Both steps are done in a browser and cannot be automated from CI.
+Five things, none of which can be automated from CI.
 
-### 1. Register the pending publishers
+### 1. PyPI trusted publishers
 
 The project does not exist on either index yet, so register a **pending**
-publisher (PyPI calls it that for a project whose first release has not landed).
-
-On <https://pypi.org/manage/account/publishing/> and again on
+publisher on <https://pypi.org/manage/account/publishing/> and again on
 <https://test.pypi.org/manage/account/publishing/>:
 
-| Field | Value |
+| field | value |
 |---|---|
 | PyPI project name | `niverel-mamba` |
 | Owner | `hallcyn` |
@@ -26,52 +53,94 @@ On <https://pypi.org/manage/account/publishing/> and again on
 | Workflow name | `publish-pypi.yml` |
 | Environment name | `pypi` on PyPI, `testpypi` on TestPyPI |
 
-The environment name matters: `publish-pypi.yml` sets
-`environment.name` from its `repository` input, and PyPI refuses the exchange
-if it does not match.
+The environment name matters: `publish-pypi.yml` derives `environment.name`
+from its input, and PyPI refuses the exchange on a mismatch.
 
-### 2. Create the GitHub environments
+There is no PyPI token anywhere in this repository and there should never be
+one. A token is a long-lived credential that can be exfiltrated; an OIDC
+exchange is scoped to one workflow run of one repository.
 
-In **Settings → Environments**, create `pypi` and `testpypi`.
+### 2. GitHub environments
 
-Add a required reviewer to `pypi`. Publishing to the real index is
-irreversible — a version number can never be reused — so it should take a
-deliberate human approval, not just a green pipeline.
+Under **Settings → Environments**, create `pypi`, `testpypi` and `gpu`.
 
-## Releasing
+Put a **required reviewer** on `pypi` and on `gpu`. Publishing is irreversible,
+and `gpu` is the gate that stops a tag push from renting hardware unattended.
 
-Everything before the first publish is already enforced by CI; the ordering
-below exists so that nothing is published before the thing that would have
-caught it wrong has run.
+### 3. Nothing, for the pods
 
-```bash
-# 1. main is green, and the version is bumped in pyproject.toml
-#    (src/niverel_mamba/version.py is checked against it by the test suite)
+There is nothing to create. Each certification pod is made when a release needs
+it and destroyed immediately afterwards, so no volume bills between releases
+and no self-hosted runner stands idle against a public repository.
 
-# 2. Tag. release.yml triggers on tags matching v*
-git tag -a v0.1.0 -m "niverel-mamba 0.1.0"
-git push origin v0.1.0
-```
+Two details worth knowing, both of which came out of reading the API rather
+than the docs:
 
-`release.yml` then runs, in order:
+**`POST /pods` has no required fields.** An empty body is accepted and RunPod
+rents a GPU using its own defaults — this is not hypothetical, it happened
+while probing the API and produced a live RTX 4090 at $0.74/hr. So
+`_create_payload` sets every field that decides what gets rented, and a test
+asserts it, name by name.
 
-1. **build-core** — ruff, mypy, the full test suite, `python -m build`,
-   `twine check`
-2. **certify-gpu** — only when a `build-cuda-wheels` run is nominated via
-   `wheel_run_id`; skipped for a core-only release
-3. **github-release** — verifies every asset's SHA-256 against its manifest,
-   then creates the release
-4. **publish-testpypi** → cold install on Ubuntu and macOS, Python 3.10 and
-   3.12, exercising `doctor`, `inspect`, `--version` and `verify`'s refusal
-   path
-5. **publish-pypi** → the same cold-install gate against the real index
+**Capacity is handled by offering the whole family, not by picking a region.**
+`gpuTypeIds` is a list, so sm_80 asks for any A100 (`A100 80GB PCIe`,
+`A100-SXM4-80GB`, `A100-SXM4-40GB`) and sm_90 for any H100 (`H100 80GB HBM3`,
+`H100 NVL`, `H100 PCIe`). H100 stock is routinely exhausted in a given
+datacenter; every H100 is sm_90, so letting RunPod place the pod is far more
+robust than naming one. `countryCodes` defaults to `["US"]`, where capacity is
+deepest.
 
-Step 4 gating step 5 is the point. A package that builds and tests perfectly in
-its own repository can still be unusable once installed: 0.1.0 nearly shipped
-with a `doctor` that crashed on a missing `numpy`, and only a genuine cold
-install surfaced it.
+Prices at the time of writing: A100 PCIe $1.19/hr, A100 SXM $1.39/hr, H100 NVL
+$2.59/hr, H100 SXM $2.69/hr. A certification takes about fifteen minutes, so a
+release costs roughly a dollar of GPU.
 
-## What is *not* released this way
+### 4. A runner, automatically
+
+Nothing to install. The pod boots straight into a GitHub runner registered
+`--ephemeral`, which takes exactly one job and retires.
+
+> **This repository is public**, and GitHub advises against self-hosted runners
+> on public repositories: a pull request could otherwise run arbitrary code on
+> your machine. Three things keep this safe. The certification workflows
+> trigger only on `workflow_dispatch` and `workflow_call` — **never**
+> `pull_request`, and `tests/release/test_workflows.py` is where to add a guard
+> if that is ever tempting to change. The runner is `--ephemeral`, so it cannot
+> serve a second job. And the machine is destroyed minutes later.
+
+### 5. Secrets
+
+| secret | needed by | why |
+|---|---|---|
+| `RUNPOD_API_KEY` | `certify-cuda.yml` | creating and destroying the pods |
+| `RUNNER_PAT` | `certify-cuda.yml` | only if `GITHUB_TOKEN` turns out not to be granted `administration: write`; a fine-grained PAT on this repository with **Administration: read and write**, nothing else |
+| `HF_TOKEN` | `certify-cuda.yml` | optional; without it the real V3 fixture skips by name rather than being silently absent |
+
+---
+
+## What bounds the GPU bill
+
+Three things, because the failure that costs money is not "the pod would not
+start" but "the pod started and nothing stopped it":
+
+* approval on the `gpu` environment, so nothing begins without you;
+* `timeout-minutes: 40` on each certification job, against a run that takes
+  about fifteen — a runner that never registers costs minutes, not hours;
+* `stop-pod` runs `if: always()`, and a `guard` job then asserts that no
+  certification pod is left running. A teardown that silently failed becomes a
+  red workflow rather than a slow leak.
+
+`scripts/runpod_pod.py` holds that logic rather than the workflow YAML, so it
+can be tested — and it is, including the paths that matter: stopping a pod that
+does not exist, that never started, and when the API is unreachable.
+
+Note that RunPod bills volume storage even while a pod is stopped. Two pods at
+20 GB is roughly four dollars a month standing still, against about a dollar of
+compute per release. If releases are rare, creating the pods on demand would
+cost less than keeping them.
+
+---
+
+## What is not released this way
 
 CUDA wheels for `mamba-ssm` and `causal-conv1d` are **never** published to
 PyPI. They exceed PyPI's per-file limits, the full matrix runs to gigabytes,
@@ -83,93 +152,13 @@ recording each artefact's SHA-256, source commit and build workflow.
 `niverel-mamba install-backend cuda` fetches that manifest, verifies the SHA
 before installing, and refuses rather than compiling on the user's machine.
 
-Those wheels must not be attached to a release until
-`certify-cuda-sm80` / `certify-cuda-sm90` have produced a passing report
-against those exact artefacts on real hardware. Until then the manifest carries
-`certification.status: uncertified` and `cuda-reference` is published as
-`experimental`.
+Until a certification run has passed against those exact artefacts, the
+manifest carries `certification.status: uncertified`, `cuda-reference` is
+published as `experimental`, and the `cuda_bfloat16` tolerance class in
+`tolerances.yaml` keeps its starting values with `observed: null`. Replace that
+block with the measured numbers, and only then change the published status.
 
-## Certifying the CUDA backend on rented hardware
-
-`cuda-reference` stays `experimental` until a GPU has actually run it. Two
-things are worth separating, because conflating them wastes money.
-
-**Building needs no GPU.** `nvcc` and the toolkit suffice, which is why
-`build-cuda-wheels.yml` compiles in Docker on free GitHub runners. Never pay
-GPU-hours to compile.
-
-**Certifying needs the exact architecture.** A wheel built with
-`TORCH_CUDA_ARCH_LIST="8.0;9.0"` contains cubins for sm_80 and sm_90 and
-nothing else. It will not start on anything else:
-
-```
-no kernel image is available for execution on the device
-```
-
-So an Ada card (sm_89: RTX 4090, L40S, RTX 2000 Ada) cannot certify these
-wheels, however capable it is. sm_80 means an A100; sm_90 means an H100. A
-certification run is roughly fifteen minutes, so renting one of each costs
-about a dollar.
-
-### Renting a pod
-
-On RunPod, pick the **PyTorch 2.8.0** template
-(`runpod/pytorch:...-cu1281-torch280-ubuntu2404`). It is the only one of the
-offered templates on Ubuntu 24.04, hence the only one with **Python 3.12** —
-and our wheels are tagged `cp312`, so on the py3.11 and py3.10 templates they
-simply refuse to install. Its CUDA 12.8.1 also matches the cu128 reference.
-The template's preinstalled torch is irrelevant; we install our own from the
-pinned index.
-
-### Registering it as a runner
-
-`certify-cuda-sm80.yml` and `certify-cuda-sm90.yml` already target
-`[self-hosted, linux, x64, cuda, sm80]` and `sm90`, so a pod carrying those
-labels picks the job up with no workflow change.
-
-```bash
-# On your machine: mint a short-lived registration token.
-gh api -X POST repos/hallcyn/niverel-mamba/actions/runners/registration-token --jq .token
-
-# On the pod. RunPod containers run as root, which the runner refuses by
-# default; the env var is the sanctioned override.
-export RUNNER_ALLOW_RUNASROOT=1
-mkdir -p /actions-runner && cd /actions-runner
-LATEST=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | grep -oP '"tag_name": "v\K[^"]+')
-curl -sL -o runner.tar.gz \
-  "https://github.com/actions/runner/releases/download/v${LATEST}/actions-runner-linux-x64-${LATEST}.tar.gz"
-tar xzf runner.tar.gz
-./config.sh --url https://github.com/hallcyn/niverel-mamba \
-  --token <TOKEN> --labels self-hosted,linux,x64,cuda,sm80 \
-  --ephemeral --unattended --name runpod-a100
-./run.sh
-```
-
-Then dispatch `certify-cuda-sm80` with the `build-cuda-wheels` run id to
-certify. The job refuses to run if the GPU it lands on is not the architecture
-the workflow claims, so a mislabelled pod fails loudly rather than producing a
-report labelled `sm_80` from something else.
-
-### Why `--ephemeral` is not optional here
-
-**This repository is public.** GitHub advises against self-hosted runners on
-public repositories, because a pull request can otherwise run arbitrary code on
-your machine. Two things keep this safe, and both must stay true:
-
-* the certification workflows trigger only on `workflow_dispatch` and
-  `workflow_call` — **never** `pull_request`. `tests/release/test_workflows.py`
-  is the place to add a guard if that is ever tempting to change;
-* `--ephemeral` retires the runner after one job, so nothing persists between
-  runs. Destroy the pod afterwards.
-
-### Afterwards
-
-A passing report is what promotes the backend. Until then, and this is
-enforced by the tests rather than by good intentions: the binary manifest
-carries `certification.status: uncertified`, `cuda-reference` is published as
-`experimental`, and the `cuda_bfloat16` tolerance class in `tolerances.yaml`
-carries the brief's starting values with `observed: null`. Replace that block
-with the measured numbers, and only then change the published status.
+---
 
 ## Version numbering
 

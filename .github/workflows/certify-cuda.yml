@@ -1,0 +1,196 @@
+name: certify-cuda
+
+# Certify cuda-reference on real hardware, on a RunPod pod that exists only for
+# the length of this workflow.
+#
+# The pod is created, boots straight into a GitHub runner registered
+# `--ephemeral`, takes exactly one job, and is destroyed. Nothing persists: no
+# idle volume billing between releases, and no standing self-hosted runner on a
+# public repository.
+#
+# What bounds the bill, in order of how much each one matters:
+#
+#   * `create-pod` runs in the `gpu` environment, so a required reviewer stands
+#     between a tag push and any GPU billing. Everything before it is free.
+#   * `terminate` is `if: always()`. It must destroy the pod when certification
+#     fails, when the runner never registers, and when the run is cancelled --
+#     those are precisely the paths where a machine gets forgotten.
+#   * `guard` then asserts no pod of ours survives, and fails *closed*: being
+#     unable to check is not the same as having checked.
+#
+# A GPU is not needed to build the wheels, only to run them. See RELEASING.md.
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        description: "sm80 or sm90"
+        required: true
+        type: string
+      wheel_run_id:
+        description: "run holding the cuda-wheels artifacts; empty means this run"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      RUNPOD_API_KEY:
+        required: true
+      RUNNER_PAT:
+        required: false
+      HF_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  create-pod:
+    runs-on: ubuntu-latest
+    # The approval gate. Give this environment a required reviewer.
+    environment: gpu
+    permissions:
+      contents: read
+      # Minting a runner registration token is a repository-administration
+      # call. If GITHUB_TOKEN turns out not to be granted it here, set a
+      # fine-grained RUNNER_PAT secret with Administration: read and write; the
+      # step below prefers it when present.
+      administration: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: mint a runner registration token
+        id: token
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_PAT || github.token }}
+        run: |
+          token=$(gh api -X POST \
+            "repos/${{ github.repository }}/actions/runners/registration-token" \
+            --jq .token) || {
+              echo "::error::could not mint a runner registration token. If this is a"
+              echo "::error::permissions failure, add a fine-grained RUNNER_PAT secret"
+              echo "::error::with Administration: read and write on this repository."
+              exit 1
+            }
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: create the ${{ inputs.arch }} pod
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          python3 scripts/runpod_pod.py create \
+            --arch "${{ inputs.arch }}" \
+            --run-id "${{ github.run_id }}" \
+            --runner-token "${{ steps.token.outputs.token }}" \
+            --repo-url "${{ github.server_url }}/${{ github.repository }}" \
+            --wait
+
+  certify:
+    needs: create-pod
+    runs-on: [self-hosted, linux, x64, cuda, "${{ inputs.arch }}"]
+    # The pod bills for every minute of this. A run takes about fifteen; forty
+    # bounds the case where the runner never registers, which would otherwise
+    # sit at the six-hour default.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: report the GPU actually present
+        run: |
+          nvidia-smi
+          python3 -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_capability(0))" || true
+
+      - name: refuse to run on the wrong architecture
+        # A report labelled sm_80 produced by something else would be worse
+        # than no report at all.
+        run: |
+          python3 - <<'PY'
+          import sys, torch
+          major, minor = torch.cuda.get_device_capability(0)
+          actual, expected = f"sm_{major}{minor}", "${{ inputs.arch }}".replace("sm", "sm_")
+          if actual != expected:
+              sys.exit(f"::error::this runner is {actual}, not {expected}; refusing to label the report")
+          print("architecture confirmed:", actual)
+          PY
+
+      - name: fetch the wheels built in this run
+        if: inputs.wheel_run_id == ''
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cuda-wheels-*
+          path: wheelhouse
+          merge-multiple: true
+
+      - name: fetch the wheels from a nominated run
+        if: inputs.wheel_run_id != ''
+        uses: actions/download-artifact@v8
+        with:
+          run-id: ${{ inputs.wheel_run_id }}
+          github-token: ${{ github.token }}
+          pattern: cuda-wheels-*
+          path: wheelhouse
+          merge-multiple: true
+
+      - name: verify every SHA-256 before installing
+        run: python3 scripts/verify_release_assets.py --wheelhouse wheelhouse
+
+      - name: cold install, no compilation
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install --no-deps --only-binary :all: wheelhouse/*.whl
+          .venv/bin/pip install --quiet -e ".[dev]" einops
+          .venv/bin/niverel-mamba doctor
+
+      - name: build fixtures, including the real Foundation V3 block
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          .venv/bin/python scripts/make_golden_fixture.py
+          if [ -n "$HF_TOKEN" ]; then
+            .venv/bin/python scripts/make_golden_fixture.py --only-niverel
+          else
+            echo "::warning::HF_TOKEN not set; the real V3 fixture will skip by name"
+          fi
+
+      - name: cuda-reference parity
+        run: .venv/bin/python -m pytest tests/cuda tests/niverel -q
+
+      - name: certification report
+        run: |
+          .venv/bin/niverel-mamba verify --fixture segmented --device cuda \
+            --report certification-${{ inputs.arch }}.json
+          cat certification-${{ inputs.arch }}.json
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: certification-${{ inputs.arch }}
+          path: certification-${{ inputs.arch }}.json
+
+  terminate:
+    needs: [create-pod, certify]
+    # Every path, including a rejected approval, a runner that never came up,
+    # and a cancelled workflow.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: destroy the ${{ inputs.arch }} pod
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          python3 scripts/runpod_pod.py terminate \
+            --arch "${{ inputs.arch }}" --run-id "${{ github.run_id }}"
+
+  guard:
+    needs: terminate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: no certification pod may survive
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: python3 scripts/runpod_pod.py assert-none-running
