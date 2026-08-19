@@ -344,3 +344,81 @@ def test_merged_artifacts_carry_the_architecture_in_every_filename():
     for path in reports:
         assert "inputs.arch" in path, f"{path} does not embed the architecture"
         assert "$target" in path, f"{path} does not distinguish the three runtimes"
+
+
+def test_every_job_building_fixtures_installs_torch():
+    """`torch` is an extra, so `.[dev]` alone cannot build a fixture.
+
+    Keeping torch out of the core dependencies is deliberate -- an MLX user must
+    not have to download it -- but that makes `pip install -e ".[dev]"` a
+    perfectly reasonable-looking line that leaves `make_golden_fixture.py`
+    without the one import it cannot start without.
+
+    It failed exactly that way on the certification pod, after the GPU had been
+    rented and the wheels verified -- the most expensive possible place to
+    discover a missing extra.
+
+    The check is per *environment*, not per job, and that distinction is the
+    whole point: the certification job builds fixtures in `.venv-fixtures` and
+    then installs a CUDA torch into a separate venv per runtime. A job-level
+    scan sees those later installs and passes the broken workflow, which is
+    exactly what a first version of this test did.
+    """
+    #: `torch`, `torch>=2.11,<2.14`, `torch~=2.12.0`, `torch==${{ matrix.torch }}`.
+    requirement = re.compile(r"^torch([<>=~!].*)?$")
+    venv_python = re.compile(r"(\S+)/bin/python")
+
+    def installs_torch(lines: list[str], extra_values: str = "") -> bool:
+        text = " ".join(lines) + " " + extra_values
+        extras = {
+            extra.strip()
+            for group in re.findall(r"\[([A-Za-z0-9_,\- ]+)\]", text)
+            for extra in group.split(",")
+        }
+        tokens = {token.strip("\"'") for token in text.split()}
+        return (
+            "torch" in extras
+            or "--extra torch" in text
+            or any(requirement.match(token) for token in tokens)
+        )
+
+    problems = []
+    for name, workflow in _workflows().items():
+        for job_id, job in workflow["jobs"].items():
+            steps = job.get("steps") or []
+            lines = [
+                line for step in steps for line in str(step.get("run", "")).splitlines()
+            ]
+            # A matrix can be a bare expression (${{ fromJSON(...) }}), in which
+            # case there is nothing static to read.
+            matrix = (job.get("strategy") or {}).get("matrix")
+            values = " ".join(
+                str(v)
+                for entry in (matrix.get("include", []) if isinstance(matrix, dict) else [])
+                for v in entry.values()
+            )
+
+            for line in lines:
+                if "make_golden_fixture" not in line:
+                    continue
+                found = venv_python.search(line)
+                if found:
+                    # An explicit venv: only what was installed into *that* venv
+                    # counts. `.venv-fixtures/bin/python` needs
+                    # `.venv-fixtures/bin/pip`.
+                    prefix = found.group(1)
+                    relevant = [line for line in lines if f"{prefix}/bin/pip" in line]
+                    ok = installs_torch(relevant)
+                else:
+                    # `uv run python ...` -- the job's ambient environment.
+                    relevant = [
+                        line for line in lines if "install" in line or "sync" in line
+                    ]
+                    ok = installs_torch(relevant, values)
+                if not ok:
+                    problems.append(
+                        f"{name}:{job_id} runs `{line.strip()[:60]}` but never "
+                        f"installs torch into the environment it uses"
+                    )
+                    break
+    assert not problems, "\n".join(problems)
