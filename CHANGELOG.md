@@ -11,22 +11,20 @@ versioning follows the scheme in the project brief:
 
 ## [Unreleased]
 
-### Fixed
-
-* A cold `pip install niverel-mamba` followed by `niverel-mamba doctor` crashed
-  with `ModuleNotFoundError: numpy`. `build_parser()` imports every subcommand
-  so `--help` can list them, so `verify`'s transitive numpy import was paid for
-  by `doctor` and `inspect` too. numpy is now a core dependency (certification
-  utilities are part of the core surface, and both `compare()` and
-  `tensor_digest()` need it), and `verify` defers its heavy imports so the
-  diagnostic commands stay usable in a partially-installed environment.
-* `niverel-mamba verify` without PyTorch printed a raw traceback instead of a
-  clean, actionable error. It now exits 2 with an explanation.
-
 ## [0.1.0] — 2026-08-17
 
 First release. Portable Mamba2 with one weight contract and honest per-backend
 certification.
+
+### Packaging
+
+* `numpy` is a core dependency. Certification utilities are part of the core
+  surface, and both `compare()` and `tensor_digest()` need it. The CLI keeps
+  its heavy imports inside `verify.run()`, so `doctor` and `inspect` stay
+  usable on a core-only install -- a cold `pip install` followed by
+  `niverel-mamba doctor` must never crash on a dependency it does not use.
+* `niverel-mamba verify` without PyTorch exits 2 with an actionable message
+  rather than a traceback.
 
 ### Added
 

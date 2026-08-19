@@ -26,8 +26,8 @@ jobs:
     outputs:
       failed: ${{ job.status }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
       - run: |
           uv venv --python 3.12
           uv pip install "${{ matrix.spec }}" --index-url "${{ matrix.index }}" --prerelease allow
@@ -39,8 +39,8 @@ jobs:
     # Watches for a new mamba-ssm release changing the weight contract.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
       - run: uv sync --extra torch --extra dev
       - name: has upstream released a version we do not pin?
         run: |
@@ -61,7 +61,7 @@ jobs:
     if: failure()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v9
         with:
           script: |
             const title = `nightly-upstream failed on ${new Date().toISOString().slice(0, 10)}`;

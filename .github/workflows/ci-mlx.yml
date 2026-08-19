@@ -19,8 +19,8 @@ jobs:
       group: macos-hosted-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: install MLX plus torch (needed as the comparison reference)
@@ -34,7 +34,7 @@ jobs:
       - name: certification report
         run: |
           uv run niverel-mamba verify --fixture segmented --mlx --report mlx-report.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: mlx-certification
