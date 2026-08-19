@@ -112,7 +112,22 @@ Nothing to install. The pod boots straight into a GitHub runner registered
 | secret | needed by | why |
 |---|---|---|
 | `RUNPOD_API_KEY` | `certify-cuda.yml` | creating and destroying the pods |
-| `RUNNER_PAT` | `certify-cuda.yml` | only if `GITHUB_TOKEN` turns out not to be granted `administration: write`; a fine-grained PAT on this repository with **Administration: read and write**, nothing else |
+| `RUNNER_PAT` | `certify-cuda.yml` | **required.** A fine-grained PAT limited to this repository with **Administration: read and write** as its only permission |
+
+`RUNNER_PAT` cannot be avoided. Registering a self-hosted runner is a
+repository-administration call, and `administration` is not among the scopes a
+workflow may request — the valid ones are `actions`, `attestations`, `checks`,
+`contents`, `deployments`, `discussions`, `id-token`, `issues`, `models`,
+`packages`, `pages`, `pull-requests`, `repository-projects`, `security-events`
+and `statuses`. So `GITHUB_TOKEN` can never mint a runner token, whatever it is
+granted.
+
+Asking for the scope anyway does not fail softly: GitHub rejects the workflow
+file outright with `Unexpected value 'administration'`, which takes down every
+workflow in the repository until it is removed.
+
+Scope the PAT to this one repository and give it nothing but Administration.
+That is enough to register a runner and not enough to do much else.
 | `HF_TOKEN` | `certify-cuda.yml` | optional; without it the real V3 fixture skips by name rather than being silently absent |
 
 ---

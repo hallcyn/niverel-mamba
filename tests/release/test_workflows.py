@@ -239,3 +239,34 @@ def test_release_jobs_check_out_the_ref_being_released():
         )
         ref = str(checkout.get("with", {}).get("ref", ""))
         assert "inputs.tag" in ref, f"{job_id} checks out {ref or 'the default ref'}"
+
+
+#: The only permission scopes a workflow may request. `administration` is
+#: conspicuously absent, which is why a self-hosted runner cannot be registered
+#: with GITHUB_TOKEN at all -- it needs a PAT.
+VALID_PERMISSION_SCOPES = frozenset({
+    "actions", "attestations", "checks", "contents", "deployments", "discussions",
+    "id-token", "issues", "models", "packages", "pages", "pull-requests",
+    "repository-projects", "security-events", "statuses",
+})
+
+
+def test_only_real_permission_scopes_are_requested():
+    """An invented scope does not degrade gracefully.
+
+    Requesting `administration: write` -- a reasonable guess, since registering
+    a runner *is* a repository-administration call -- makes GitHub reject the
+    whole file with "Unexpected value 'administration'", taking down every
+    workflow in the repository until it is removed.
+    """
+    problems = []
+    for name, workflow in _workflows().items():
+        blocks = [("workflow", workflow.get("permissions"))]
+        blocks += [(job_id, job.get("permissions")) for job_id, job in workflow["jobs"].items()]
+        for where, permissions in blocks:
+            if not isinstance(permissions, dict):
+                continue
+            for scope in permissions:
+                if scope not in VALID_PERMISSION_SCOPES:
+                    problems.append(f"{name}:{where} requests unknown scope {scope!r}")
+    assert not problems, "\n".join(sorted(problems))

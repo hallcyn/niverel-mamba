@@ -36,7 +36,7 @@ on:
       RUNPOD_API_KEY:
         required: true
       RUNNER_PAT:
-        required: false
+        required: true
       HF_TOKEN:
         required: false
 
@@ -51,27 +51,33 @@ jobs:
     environment: gpu
     permissions:
       contents: read
-      # Minting a runner registration token is a repository-administration
-      # call. If GITHUB_TOKEN turns out not to be granted it here, set a
-      # fine-grained RUNNER_PAT secret with Administration: read and write; the
-      # step below prefers it when present.
-      administration: write
     steps:
       - uses: actions/checkout@v7
 
       - name: mint a runner registration token
         id: token
+        # GITHUB_TOKEN cannot do this. Registering a self-hosted runner is a
+        # repository-administration call, and `administration` is not among the
+        # scopes a workflow may request -- the valid ones are actions, checks,
+        # contents, deployments, discussions, id-token, issues, packages, pages,
+        # pull-requests, repository-projects, security-events and statuses.
+        # Asking for it does not degrade gracefully either: the workflow file is
+        # rejected outright with "Unexpected value 'administration'".
+        #
+        # So this needs a fine-grained PAT scoped to this repository with
+        # Administration: read and write, and nothing else.
         env:
-          GH_TOKEN: ${{ secrets.RUNNER_PAT || github.token }}
+          GH_TOKEN: ${{ secrets.RUNNER_PAT }}
         run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::RUNNER_PAT is not set. Create a fine-grained personal access"
+            echo "::error::token limited to this repository, with Administration: read and"
+            echo "::error::write as its only permission, and add it as a repository secret."
+            exit 1
+          fi
           token=$(gh api -X POST \
             "repos/${{ github.repository }}/actions/runners/registration-token" \
-            --jq .token) || {
-              echo "::error::could not mint a runner registration token. If this is a"
-              echo "::error::permissions failure, add a fine-grained RUNNER_PAT secret"
-              echo "::error::with Administration: read and write on this repository."
-              exit 1
-            }
+            --jq .token)
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
 

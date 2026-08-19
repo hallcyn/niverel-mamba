@@ -24,10 +24,6 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # certify-cuda mints a runner registration token, which is a repository
-      # administration call. A callee can only downgrade what the caller
-      # grants, so it has to be granted here.
-      administration: write
     with:
       arch: sm90
       wheel_run_id: ${{ inputs.wheel_run_id }}
