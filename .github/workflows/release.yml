@@ -104,7 +104,11 @@ jobs:
         with:
           pattern: cuda-wheels-*
           path: cuda-wheels
-          merge-multiple: true
+          # NOT merged: every target ships a manifest.json and wheels with
+          # identical filenames, so merging leaves one target's manifest beside
+          # another's wheels. Release assets are a flat namespace too, so the
+          # three sets are attached as one archive each.
+          merge-multiple: false
 
       - name: fetch the certification reports
         uses: actions/download-artifact@v8
@@ -113,14 +117,31 @@ jobs:
           path: certification
           merge-multiple: true
 
+      - name: every CUDA asset must match the SHA-256 in its manifest
+        run: python scripts/verify_release_assets.py --wheelhouse cuda-wheels --allow-empty
+
+      - name: pack one archive per runtime
+        # A user needs to know which runtime a wheel was built for, and the
+        # wheel filename cannot say: tags encode neither the torch nor the CUDA
+        # version. Renaming the wheel is not an option either -- pip validates
+        # the filename against the metadata and rejects a mismatch. So the
+        # runtime lives in the archive name, and each archive carries the
+        # manifest that describes what is inside it.
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          for dir in cuda-wheels/cuda-wheels-*/; do
+            target=$(basename "$dir" | sed 's/^cuda-wheels-//')
+            (cd "$dir" && zip -qr "$GITHUB_WORKSPACE/assets/niverel-mamba-cuda-$target.zip" .)
+            cp "$dir/manifest.json" "assets/manifest-$target.json"
+          done
+          ls -l assets
+
       - name: list exactly what will be attached
         run: |
           echo "distributions:"; ls -l dist
-          echo "CUDA wheels:";   ls -l cuda-wheels
+          echo "CUDA archives:"; ls -l assets
           echo "reports:";       ls -l certification
-
-      - name: every CUDA asset must match the SHA-256 in its manifest
-        run: python scripts/verify_release_assets.py --wheelhouse cuda-wheels --allow-empty
 
       - name: refuse to publish a release with no distributions
         run: |
@@ -154,7 +175,7 @@ jobs:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             dist/*
-            cuda-wheels/*
+            assets/*
             certification/*
           generate_release_notes: true
           fail_on_unmatched_files: false

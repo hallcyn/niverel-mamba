@@ -19,6 +19,7 @@ Everything here is offline: it parses YAML and compares, nothing more.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -270,3 +271,62 @@ def test_only_real_permission_scopes_are_requested():
                 if scope not in VALID_PERMISSION_SCOPES:
                     problems.append(f"{name}:{where} requests unknown scope {scope!r}")
     assert not problems, "\n".join(sorted(problems))
+
+
+def test_wheel_artifacts_are_never_merged_into_one_directory():
+    """Each CUDA target ships identically-named files; merging loses some.
+
+    Every `cuda-wheels-*` artifact contains a `manifest.json` and wheels named
+    `mamba_ssm-...whl` and `causal_conv1d-...whl`. Downloading them with
+    `merge-multiple: true` puts all three into one directory, where the last
+    writer wins per filename -- so one target's manifest ends up describing
+    another target's wheels.
+
+    That stopped the first GPU certification with a SHA-256 mismatch, which was
+    the lucky outcome: the interleaving is nondeterministic, so it could just as
+    easily have produced a self-consistent directory and certified wheels that
+    were never the ones the manifest described.
+    """
+    problems = []
+    for name, workflow in _workflows().items():
+        for job_id, job in workflow["jobs"].items():
+            for step in job.get("steps", []) or []:
+                if "download-artifact" not in str(step.get("uses", "")):
+                    continue
+                with_ = step.get("with") or {}
+                pattern = str(with_.get("pattern", ""))
+                if pattern.startswith("cuda-wheels") and with_.get("merge-multiple"):
+                    problems.append(
+                        f"{name}:{job_id} merges {pattern}, which collides on filenames"
+                    )
+    assert not problems, "\n".join(problems)
+
+
+def test_merged_artifacts_carry_the_architecture_in_every_filename():
+    """`certification-*` *is* merged, and that is only safe by construction.
+
+    The sm80 and sm90 certifications are two calls to the same reusable
+    workflow, so they upload two artifacts whose *contents* are collected with
+    `merge-multiple: true`. That is the same flattening that lost wheels --
+    harmless here only because each report is written as
+    `certification-<arch>-<target>.json`, so sm80's six filenames can never
+    equal sm90's.
+
+    Dropping the arch from that name would silently reintroduce the collision
+    on a path that costs an H100 to discover, so the invariant is asserted
+    rather than left as a comment.
+    """
+    steps = _workflows()["certify-cuda.yml"]["jobs"]["certify"]["steps"]
+
+    upload = next(s for s in steps if "upload-artifact" in str(s.get("uses", "")))
+    assert "inputs.arch" in str(upload["with"]["name"]), (
+        "the certification artifact name must distinguish sm80 from sm90"
+    )
+
+    written = "".join(str(s.get("run", "")) for s in steps)
+    # Split on whitespace would tear `${{ inputs.arch }}` in half.
+    reports = set(re.findall(r"""reports/certification[^\n"']*?\.json""", written))
+    assert reports, "no certification report path found in certify-cuda.yml"
+    for path in reports:
+        assert "inputs.arch" in path, f"{path} does not embed the architecture"
+        assert "$target" in path, f"{path} does not distinguish the three runtimes"

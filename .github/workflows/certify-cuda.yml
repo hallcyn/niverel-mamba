@@ -126,7 +126,11 @@ jobs:
         with:
           pattern: cuda-wheels-*
           path: wheelhouse
-          merge-multiple: true
+          # NOT merged. All three artifacts contain a manifest.json and wheels
+          # with identical filenames, so merging them into one directory leaves
+          # one target's manifest next to another target's wheels -- which is
+          # exactly the SHA-256 mismatch that stopped the first GPU run.
+          merge-multiple: false
 
       - name: fetch the wheels from a nominated run
         if: inputs.wheel_run_id != ''
@@ -136,44 +140,68 @@ jobs:
           github-token: ${{ github.token }}
           pattern: cuda-wheels-*
           path: wheelhouse
-          merge-multiple: true
+          # NOT merged. All three artifacts contain a manifest.json and wheels
+          # with identical filenames, so merging them into one directory leaves
+          # one target's manifest next to another target's wheels -- which is
+          # exactly the SHA-256 mismatch that stopped the first GPU run.
+          merge-multiple: false
 
-      - name: verify every SHA-256 before installing
+      - name: verify every SHA-256, in every wheelhouse
         run: python3 scripts/verify_release_assets.py --wheelhouse wheelhouse
-
-      - name: cold install, no compilation
-        run: |
-          python3 -m venv .venv
-          .venv/bin/pip install --quiet --upgrade pip
-          .venv/bin/pip install --no-deps --only-binary :all: wheelhouse/*.whl
-          .venv/bin/pip install --quiet -e ".[dev]" einops
-          .venv/bin/niverel-mamba doctor
 
       - name: build fixtures, including the real Foundation V3 block
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          .venv/bin/python scripts/make_golden_fixture.py
+          python3 -m venv .venv-fixtures
+          .venv-fixtures/bin/pip install --quiet -e ".[dev]"
+          .venv-fixtures/bin/python scripts/make_golden_fixture.py
           if [ -n "$HF_TOKEN" ]; then
-            .venv/bin/python scripts/make_golden_fixture.py --only-niverel
+            .venv-fixtures/bin/python scripts/make_golden_fixture.py --only-niverel
           else
             echo "::warning::HF_TOKEN not set; the real V3 fixture will skip by name"
           fi
 
-      - name: cuda-reference parity
-        run: .venv/bin/python -m pytest tests/cuda tests/niverel -q
-
-      - name: certification report
+      - name: certify every runtime we ship
+        # One venv per target. The wheels are compiled against a specific torch
+        # ABI, so certifying one runtime says nothing about the others -- and we
+        # ship all three. Each gets its own report.
         run: |
-          .venv/bin/niverel-mamba verify --fixture segmented --device cuda \
-            --report certification-${{ inputs.arch }}.json
-          cat certification-${{ inputs.arch }}.json
+          set -euo pipefail
+          mkdir -p reports
+          for dir in wheelhouse/cuda-wheels-*/; do
+            target=$(basename "$dir")
+            read -r tv tc < <(python3 -c "
+          import json, sys
+          a = json.load(open('$dir/manifest.json'))['artifacts'][0]
+          print(a['torch_version'], a['torch_cuda'])")
+            index="https://download.pytorch.org/whl/cu${tc//./}"
+            echo "::group::$target — torch $tv, CUDA $tc"
+
+            venv=".venv-$target"
+            python3 -m venv "$venv"
+            "$venv/bin/pip" install --quiet --upgrade pip
+            "$venv/bin/pip" install --quiet "torch==$tv" --index-url "$index"
+            # --only-binary is the point of the whole exercise: a supported
+            # install must never compile on the user's machine.
+            "$venv/bin/pip" install --quiet --no-deps --only-binary :all: "$dir"*.whl
+            "$venv/bin/pip" install --quiet -e ".[dev]" einops
+            "$venv/bin/niverel-mamba" doctor
+
+            "$venv/bin/python" -m pytest tests/cuda tests/niverel -q
+            "$venv/bin/niverel-mamba" verify --fixture segmented --device cuda \
+              --report "reports/certification-${{ inputs.arch }}-$target.json"
+            cat "reports/certification-${{ inputs.arch }}-$target.json"
+
+            rm -rf "$venv"
+            echo "::endgroup::"
+          done
 
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: certification-${{ inputs.arch }}
-          path: certification-${{ inputs.arch }}.json
+          path: reports/
 
   terminate:
     needs: [create-pod, certify]
