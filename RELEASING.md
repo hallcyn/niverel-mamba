@@ -67,80 +67,52 @@ Under **Settings → Environments**, create `pypi`, `testpypi` and `gpu`.
 Put a **required reviewer** on `pypi` and on `gpu`. Publishing is irreversible,
 and `gpu` is the gate that stops a tag push from renting hardware unattended.
 
-### 3. The RunPod pods
+### 3. Nothing, for the pods
 
-Create two pods by hand, named exactly:
+There is nothing to create. Each certification pod is made when a release needs
+it and destroyed immediately afterwards, so no volume bills between releases
+and no self-hosted runner stands idle against a public repository.
 
-* `niverel-mamba-certif-a100` — an A100, for sm_80
-* `niverel-mamba-certif-h100` — an H100, for sm_90
+Two details worth knowing, both of which came out of reading the API rather
+than the docs:
 
-Template: **RunPod PyTorch 2.8.0**
-(`runpod/pytorch:...-cu1281-torch280-ubuntu2404`). It is the only offered
-template on Ubuntu 24.04, hence the only one with **Python 3.12** — and the
-wheels are tagged `cp312`, so on the py3.11 and py3.10 templates they simply
-refuse to install. Its CUDA 12.8.1 also matches the cu128 reference.
+**`POST /pods` has no required fields.** An empty body is accepted and RunPod
+rents a GPU using its own defaults — this is not hypothetical, it happened
+while probing the API and produced a live RTX 4090 at $0.74/hr. So
+`_create_payload` sets every field that decides what gets rented, and a test
+asserts it, name by name.
 
-**Volume: 20 GB.** Measured rather than guessed: a CUDA torch install is 3.0 GB
-(2.6 GB of wheels), our two CUDA wheels add about 1 GB installed, and the
-runner and checkout another 0.5 GB. That is 4.5 GB before caches; the pip cache
-adds 2.6 GB and the real Foundation V3 checkpoint another 1.7 GB, which is how
-10 GB runs out. 20 GB also leaves room to certify a second torch runtime later
-without a resize.
+**Capacity is handled by offering the whole family, not by picking a region.**
+`gpuTypeIds` is a list, so sm_80 asks for any A100 (`A100 80GB PCIe`,
+`A100-SXM4-80GB`, `A100-SXM4-40GB`) and sm_90 for any H100 (`H100 80GB HBM3`,
+`H100 NVL`, `H100 PCIe`). H100 stock is routinely exhausted in a given
+datacenter; every H100 is sm_90, so letting RunPod place the pod is far more
+robust than naming one. `countryCodes` defaults to `["US"]`, where capacity is
+deepest.
 
-The architecture is not negotiable. A wheel built with
-`TORCH_CUDA_ARCH_LIST="8.0;9.0"` contains cubins for sm_80 and sm_90 and
-nothing else, and will not start on anything else:
+Prices at the time of writing: A100 PCIe $1.19/hr, A100 SXM $1.39/hr, H100 NVL
+$2.59/hr, H100 SXM $2.69/hr. A certification takes about fifteen minutes, so a
+release costs roughly a dollar of GPU.
 
-```
-no kernel image is available for execution on the device
-```
+### 4. A runner, automatically
 
-So an Ada card (sm_89 — RTX 4090, L40S, RTX 2000 Ada) cannot certify these
-wheels, however capable it is. The certification job checks the device it
-landed on and refuses to write a report labelled with an architecture it is not
-running on.
-
-### 4. A runner on each pod
-
-Each pod carries a self-hosted runner that comes up with it. Install it once:
-
-```bash
-# On your machine: mint a short-lived registration token.
-gh api -X POST repos/hallcyn/niverel-mamba/actions/runners/registration-token --jq .token
-
-# On the pod, under /workspace so it survives a stop.
-export RUNNER_ALLOW_RUNASROOT=1   # RunPod containers run as root
-mkdir -p /workspace/actions-runner && cd /workspace/actions-runner
-LATEST=$(curl -s https://api.github.com/repos/actions/runner/releases/latest \
-         | grep -oP '"tag_name": "v\K[^"]+')
-curl -sL -o runner.tar.gz \
-  "https://github.com/actions/runner/releases/download/v${LATEST}/actions-runner-linux-x64-${LATEST}.tar.gz"
-tar xzf runner.tar.gz
-
-# Labels must match exactly; the workflow selects on them.
-./config.sh --url https://github.com/hallcyn/niverel-mamba --token <TOKEN> \
-  --labels self-hosted,linux,x64,cuda,sm80 --unattended --name certif-a100
-./svc.sh install && ./svc.sh start
-```
-
-Use `sm90` and `certif-h100` on the other pod. Installing it as a service means
-it re-registers when you start the pod, which is what lets the workflow do
-nothing but start and stop.
+Nothing to install. The pod boots straight into a GitHub runner registered
+`--ephemeral`, which takes exactly one job and retires.
 
 > **This repository is public**, and GitHub advises against self-hosted runners
 > on public repositories: a pull request could otherwise run arbitrary code on
-> your machine. Two things keep this safe, and both must stay true. The
-> certification workflows trigger only on `workflow_dispatch` and
-> `workflow_call` — **never** `pull_request`; `tests/release/test_workflows.py`
-> is where to add a guard if that is ever tempting to change. And the pods are
-> stopped except during a release, so the window is minutes per release rather
-> than always.
+> your machine. Three things keep this safe. The certification workflows
+> trigger only on `workflow_dispatch` and `workflow_call` — **never**
+> `pull_request`, and `tests/release/test_workflows.py` is where to add a guard
+> if that is ever tempting to change. The runner is `--ephemeral`, so it cannot
+> serve a second job. And the machine is destroyed minutes later.
 
 ### 5. Secrets
 
 | secret | needed by | why |
 |---|---|---|
-| `RUNPOD_API_KEY` | `certify-cuda.yml` | starting and stopping the pods |
+| `RUNPOD_API_KEY` | `certify-cuda.yml` | creating and destroying the pods |
+| `RUNNER_PAT` | `certify-cuda.yml` | only if `GITHUB_TOKEN` turns out not to be granted `administration: write`; a fine-grained PAT on this repository with **Administration: read and write**, nothing else |
 | `HF_TOKEN` | `certify-cuda.yml` | optional; without it the real V3 fixture skips by name rather than being silently absent |
 
 ---
