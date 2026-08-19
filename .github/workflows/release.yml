@@ -13,6 +13,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
+      tag:
+        description: "existing tag to release, e.g. v0.1.0"
+        required: true
       wheel_run_id:
         description: "build-cuda-wheels run to certify and attach (omit to release core only)"
         required: false
@@ -25,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: astral-sh/setup-uv@v10.0.1
       - run: uv sync --extra torch --extra dev
       - run: uv run ruff check . && uv run mypy src
@@ -67,6 +72,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       # Downloaded by name into a known directory rather than dumping every
       # artifact into one tree and globbing it. The previous form attached
@@ -103,6 +110,12 @@ jobs:
 
       - uses: softprops/action-gh-release@v3
         with:
+          # Explicit, because the two entry points disagree about `github.ref`:
+          # a tag push gives the tag, a workflow_dispatch gives the branch it
+          # was launched from. Relying on the default would cut a release named
+          # after a branch -- and workflow_dispatch is the only way to attach
+          # CUDA wheels, since `wheel_run_id` cannot be supplied by a tag push.
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             dist/*
             cuda-wheels/*

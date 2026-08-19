@@ -206,3 +206,29 @@ def test_the_release_refuses_to_ship_without_distributions():
     steps = _workflows()["release.yml"]["jobs"]["github-release"]["steps"]
     guards = [s for s in steps if "expected a wheel and an sdist" in str(s.get("run", ""))]
     assert guards, "github-release must verify it actually has distributions to attach"
+
+
+def test_the_release_names_its_tag_explicitly():
+    """Both entry points must produce a release on the intended tag.
+
+    `github.ref` means the tag on a tag push and the *branch* on a
+    workflow_dispatch, so relying on the default would cut a release named
+    after a branch. That matters because workflow_dispatch is the only way to
+    attach CUDA wheels: `wheel_run_id` cannot be supplied by a tag push.
+    """
+    steps = _workflows()["release.yml"]["jobs"]["github-release"]["steps"]
+    release = next(s for s in steps if "gh-release" in str(s.get("uses", "")))
+    tag_name = str(release.get("with", {}).get("tag_name", ""))
+    assert tag_name, "gh-release must be given an explicit tag_name"
+    assert "inputs.tag" in tag_name and "ref_name" in tag_name, tag_name
+
+
+def test_release_jobs_check_out_the_ref_being_released():
+    """Dispatching a release for an old tag must not build main."""
+    jobs = _workflows()["release.yml"]["jobs"]
+    for job_id in ("build-core", "github-release"):
+        checkout = next(
+            s for s in jobs[job_id]["steps"] if "actions/checkout" in str(s.get("uses", ""))
+        )
+        ref = str(checkout.get("with", {}).get("ref", ""))
+        assert "inputs.tag" in ref, f"{job_id} checks out {ref or 'the default ref'}"
