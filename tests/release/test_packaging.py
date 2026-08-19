@@ -1,4 +1,4 @@
-"""Packaging, import hygiene and supply-chain guarantees (brief section 15)."""
+"""Packaging, import hygiene and supply-chain guarantees."""
 
 from __future__ import annotations
 
@@ -124,7 +124,7 @@ def test_version_is_consistent():
 
 
 def test_torch_is_not_a_required_dependency():
-    """Brief section 13: an MLX user must not download PyTorch."""
+    """An MLX user must not download PyTorch."""
     pyproject = _pyproject()
     required = " ".join(pyproject["project"]["dependencies"])
     assert "torch" not in required

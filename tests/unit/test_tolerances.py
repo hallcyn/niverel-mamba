@@ -18,7 +18,7 @@ def test_all_brief_classes_are_sealed():
 
 
 def test_starting_values_were_not_loosened():
-    """Brief section 11.3 gives starting values. They may be tightened by
+    """The sealed starting values. They may be tightened by
     observation, never widened to make a test pass."""
     starting = {
         "cpu_float64": (1.0e-10, 1.0e-9),

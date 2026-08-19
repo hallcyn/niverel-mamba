@@ -27,7 +27,7 @@ classifiers = [
 dependencies = [
   "packaging>=24",
   "typing-extensions>=4.12",
-  # Certification utilities are core content (brief section 13), and both
+  # Certification utilities are part of the core surface, and both
   # compare() and tensor_digest() need numpy. It is NOT in the same category as
   # torch/mlx: those are large, mutually exclusive frameworks a user may not
   # want, whereas numpy is small and is what makes the core actually usable.

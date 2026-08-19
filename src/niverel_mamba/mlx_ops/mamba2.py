@@ -1,6 +1,6 @@
 """The MLX Mamba2 block.
 
-Per brief section 6.4 this deliberately does **not** imitate
+This deliberately does **not** imitate
 ``torch.nn.Module``. It is a plain object that takes canonical weights via
 :meth:`Mamba2.load_canonical_weights` and is called directly.
 

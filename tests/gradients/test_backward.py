@@ -26,7 +26,8 @@ def _grads(model, x, seq_idx=None):
 
 
 def test_gradients_reach_every_parameter(make_model, grouped_config):
-    """Brief section 11.2's gradient list: input, in_proj, conv1d, A_log, D, out_proj."""
+    """Every parameter that must receive a gradient: input, in_proj, conv1d,
+    A_log, D, out_proj."""
     import torch
 
     model = make_model(grouped_config, ssd_impl="chunked")

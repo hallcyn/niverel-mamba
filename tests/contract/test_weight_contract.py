@@ -101,7 +101,7 @@ def test_upstream_has_no_init_states(upstream):
 
 
 def test_our_module_state_dict_equals_upstreams(upstream):
-    """Brief section 16's integration requirement, on a fresh module."""
+    """The Niverel integration requirement, on a fresh module."""
     from niverel_mamba.torch_ops.mamba2 import Mamba2 as PortableMamba2
 
     upstream_cls, _ = upstream

@@ -1,4 +1,4 @@
-"""The drop-in swap Niverel needs (brief section 16)."""
+"""The drop-in swap Niverel needs."""
 
 from __future__ import annotations
 

@@ -6,7 +6,7 @@
     model.load_canonical_weights(weights)
     y = model(x, seq_idx=seq_idx)
 
-Deliberately not a ``torch.nn.Module`` lookalike (brief section 6.4).
+Deliberately not a ``torch.nn.Module`` lookalike.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Phase 0 -- build golden fixtures, including one from the real V3 checkpoint.
 
-Three fixture tiers, matching brief section 11.1:
+Three fixture tiers:
 
 ``tiny``
     B=1 L=8 D=16 N=4 headdim=8. Small enough to run in float64 and to reason

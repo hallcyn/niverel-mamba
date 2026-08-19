@@ -1,6 +1,6 @@
 """``niverel-mamba install-backend`` -- fetch certified CUDA wheels.
 
-Design constraints, all from brief sections 6.6 and 15:
+Design constraints:
 
 * **Nothing happens at import.** No download, no subprocess, no compilation
   is triggered by importing this package. Everything here runs only when the

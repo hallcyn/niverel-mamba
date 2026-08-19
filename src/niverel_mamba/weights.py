@@ -1,6 +1,6 @@
 """Strict weight loading against the canonical contract.
 
-Brief section 3.2 lists six things every backend must refuse: a missing key,
+Six things every backend must refuse: a missing key,
 an unexpected key, a differing shape, an incompatible configuration, an
 unknown contract version, and an undocumented implicit conversion. This
 module is where all six are enforced, so that every backend inherits the same

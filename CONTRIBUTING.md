@@ -57,6 +57,11 @@ Importing `niverel_mamba` must not import torch or MLX, must not touch the
 network, must not spawn a subprocess and must not compile anything. This is
 enforced by `tests/release/test_packaging.py` via an audit hook.
 
+## Releasing
+
+See `RELEASING.md`. Publishing goes through PyPI Trusted Publishing; there is
+no token in this repository and there should never be one.
+
 ## Adding a backend
 
 1. Implement `backends/base.Backend`.

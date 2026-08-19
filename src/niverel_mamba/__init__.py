@@ -5,7 +5,7 @@ for each. A Mamba2 checkpoint should not be a prisoner of the CUDA backend it
 was trained with.
 
 Importing this package downloads nothing, spawns no subprocess and compiles
-nothing (brief section 15). ``torch`` and ``mlx`` are optional extras and are
+nothing. ``torch`` and ``mlx`` are optional extras and are
 only imported when a backend that needs them is actually built.
 
     >>> from niverel_mamba import Mamba2Config, describe

@@ -20,7 +20,7 @@ def test_doctor_json(capsys):
 
 
 def test_doctor_human_output_matches_the_brief_shape(capsys):
-    """The layout of brief section 6.5, whatever is installed.
+    """The documented doctor layout, whatever is installed.
 
     The exit code is deliberately meaningful rather than always zero: doctor
     reports failure when no backend at all is usable, which is exactly the

@@ -2,7 +2,7 @@
 
 Everything here is pure inspection. Importing this module -- or the package --
 downloads nothing, spawns no subprocess and compiles nothing, which is a hard
-requirement of brief section 15.
+requirement of this package.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ __all__ = [
 class Certification(str, Enum):
     """How much a backend's numbers have actually been proven.
 
-    These are the four statuses of brief section 3.4, and they are reported
+    These are the four statuses this project publishes, and they are reported
     as-is. A backend is never advertised at a level it has not earned.
     """
 
