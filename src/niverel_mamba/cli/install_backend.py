@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from ..capabilities import detect_environment
+from ..capabilities import UPSTREAM_RUNTIME_REQUIREMENTS, detect_environment
 from ..errors import AssetVerificationError
 from ..version import __version__
 
@@ -173,10 +173,26 @@ def run(args: argparse.Namespace) -> int:
 
     print()
     print("installing ...")
+    # --no-deps is not an optimisation: it is what stops pip from replacing the
+    # CUDA torch build these wheels were compiled against.
     command = [sys.executable, "-m", "pip", "install", "--no-deps", *[str(p) for p in downloaded]]
     result = subprocess.run(command, check=False)
     if result.returncode != 0:
         print("pip install failed")
+        return result.returncode
+
+    # ... which leaves upstream's own import-time requirements uninstalled, so
+    # they are installed here, deliberately and by name. Without this the wheels
+    # land, `niverel-mamba doctor` sees their metadata, and the backend still
+    # cannot be imported by a fresh process.
+    print()
+    print(f"installing upstream's import-time requirements: {', '.join(UPSTREAM_RUNTIME_REQUIREMENTS)}")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", *UPSTREAM_RUNTIME_REQUIREMENTS],
+        check=False,
+    )
+    if result.returncode != 0:
+        print("pip install failed for upstream's requirements; the backend will not import")
         return result.returncode
 
     print()

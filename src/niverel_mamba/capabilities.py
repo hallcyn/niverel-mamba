@@ -131,6 +131,57 @@ def _module_available(name: str, distribution_name: str | None = None) -> bool:
     return spec.origin is not None or spec.loader is not None
 
 
+#: Upstream's own import-time requirements that its wheels do not carry when
+#: installed with ``--no-deps`` -- which is how they must be installed, since
+#: that is what protects the pinned torch build from being replaced.
+UPSTREAM_RUNTIME_REQUIREMENTS = ("transformers",)
+
+
+def upstream_mamba2_importable() -> tuple[bool, str | None]:
+    """Whether upstream's ``Mamba2`` can be *imported*, not merely installed.
+
+    Distribution metadata proves a wheel is present. It does not prove the
+    package imports, and for mamba-ssm 2.3.2.post1 the two came apart:
+    ``mamba_ssm/__init__.py`` pulls in ``models.mixer_seq_simple``, which
+    reaches ``transformers`` -- absent, because the certified wheels are
+    installed with ``--no-deps``.
+
+    The distinction is not academic, and the way it fails is worse than a plain
+    error. ``__init__`` imports ``modules.mamba2`` *before* the line that
+    fails, so when the package import blows up Python has already cached
+    ``mamba_ssm.modules.mamba2`` in ``sys.modules``. A later
+    ``from mamba_ssm.modules.mamba2 import Mamba2`` in the **same process**
+    then succeeds from that cache, without re-running ``__init__``. A GPU
+    certification run passed its parity tests exactly that way, against a
+    backend that a fresh process could not load at all.
+
+    So availability is answered by importing, in the only way that means
+    anything: the same import the backend itself performs.
+    """
+    global _IMPORTABLE
+    if _IMPORTABLE is not None:
+        return _IMPORTABLE
+    try:
+        from mamba_ssm.modules.mamba2 import Mamba2  # noqa: F401
+    except Exception as exc:
+        missing = getattr(exc, "name", None)
+        hint = (
+            f"; upstream requires {missing!r}, which its wheel does not install"
+            if missing in UPSTREAM_RUNTIME_REQUIREMENTS
+            else ""
+        )
+        # Deliberately not cached: a failure can be repaired inside the same
+        # process by installing what is missing, and a stale "no" would then
+        # outlive the problem.
+        return False, f"{type(exc).__name__}: {exc}{hint}"
+    _IMPORTABLE = (True, None)
+    return _IMPORTABLE
+
+
+#: Only a success is memoised; see above.
+_IMPORTABLE: tuple[bool, str | None] | None = None
+
+
 def torch_available() -> bool:
     return _module_available("torch")
 

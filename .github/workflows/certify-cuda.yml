@@ -197,7 +197,24 @@ jobs:
             # --only-binary is the point of the whole exercise: a supported
             # install must never compile on the user's machine.
             "$venv/bin/pip" install --quiet --no-deps --only-binary :all: "$dir"*.whl
-            "$venv/bin/pip" install --quiet -e ".[dev]" einops
+            # transformers is upstream's, not ours: mamba_ssm/__init__.py reaches
+            # models.mixer_seq_simple -> utils.generation -> transformers at import
+            # time, and --no-deps (which is what protects the pinned torch build)
+            # leaves it out. Without it the wheels install and the package does
+            # not import.
+            "$venv/bin/pip" install --quiet -e ".[dev]" einops transformers
+
+            # In a FRESH process, before anything else touches mamba_ssm.
+            # Upstream's __init__ imports modules.mamba2 *before* the line that
+            # used to fail, so a failed package import still leaves that
+            # submodule in sys.modules -- and a later import inside the same
+            # process succeeds from that cache. A certification passed its
+            # parity tests that way, against a backend no fresh process could
+            # load. This step is the one that cannot be fooled by it.
+            "$venv/bin/python" -c "
+          from mamba_ssm.modules.mamba2 import Mamba2
+          print('    upstream Mamba2 imports in a fresh process:', Mamba2.__module__)"
+
             "$venv/bin/niverel-mamba" doctor
 
             "$venv/bin/python" -m pytest tests/cuda tests/niverel -q

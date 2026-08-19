@@ -118,6 +118,18 @@ $ niverel-mamba verify --fixture niverel --device mps --mlx
 $ niverel-mamba install-backend cuda          # prints a plan; --yes to install
 ```
 
+The CUDA wheels are installed with `--no-deps`, which is what keeps pip from
+replacing the exact torch build they were compiled against. That leaves
+upstream's own import-time requirement, `transformers`, uninstalled, so
+`install-backend` installs it separately. Installing the wheels by hand without
+it produces a package whose metadata looks complete and which does not import:
+
+```console
+$ niverel-mamba doctor
+  cuda-reference    no    mamba-ssm is installed but will not import
+                          (ModuleNotFoundError: No module named 'transformers')
+```
+
 ## No silent fallback
 
 An explicit request either succeeds or raises. It never quietly becomes something else:
