@@ -57,6 +57,26 @@ Importing `niverel_mamba` must not import torch or MLX, must not touch the
 network, must not spawn a subprocess and must not compile anything. This is
 enforced by `tests/release/test_packaging.py` via an audit hook.
 
+## GitHub Actions versions
+
+Actions are pinned to a major tag and kept current by Dependabot. Two are
+deliberate exceptions:
+
+* `pypa/gh-action-pypi-publish@release/v1` is the floating major-version branch
+  PyPA documents. It is not a stale pin, and it must not be changed to a
+  numeric tag.
+* `astral-sh/setup-uv` is pinned to a full version (`v10.0.1`), not a major
+  tag, because it does not publish a floating `v10`. Referencing `@v10` fails
+  the whole job at setup time with "unable to find version". Every other action
+  here does publish major tags.
+* `upload-artifact` and `download-artifact` version independently, so their
+  major numbers differ. Any v4-or-later pairing interoperates; the incompatible
+  break was v3 to v4, when the artifact backend changed.
+
+Before bumping an action across a major version, check that the inputs this
+repository actually passes still exist in the new `action.yml`. Release notes
+for a patch tag will not tell you.
+
 ## Releasing
 
 See `RELEASING.md`. Publishing goes through PyPI Trusted Publishing; there is

@@ -30,7 +30,7 @@ jobs:
     permissions:
       id-token: write        # the only credential used
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist
@@ -48,7 +48,7 @@ jobs:
         os: [ubuntu-latest, macos-14]
         python: ["3.10", "3.12"]
     steps:
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "${{ matrix.python }}" }
       - name: wait for the index to catch up
         run: sleep 60

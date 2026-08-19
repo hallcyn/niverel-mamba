@@ -43,8 +43,8 @@ jobs:
     env:
       TORCH_VERSION: "2.13.0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - run: |
@@ -77,7 +77,7 @@ jobs:
         run: |
           uv run niverel-mamba verify --fixture tiny
           uv run niverel-mamba verify --fixture segmented --report macos-cpu-report.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: macos-cpu-certification
@@ -89,8 +89,8 @@ jobs:
     if: vars.HAS_SELF_HOSTED_MAC == 'true'
     runs-on: [self-hosted, macos, arm64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
       - run: |
           uv venv --python 3.12
           uv pip install -e ".[torch,dev]"
@@ -125,7 +125,7 @@ jobs:
           uv run niverel-mamba verify --fixture segmented --device mps --report mps-report.json
           uv run niverel-mamba verify --fixture niverel --device mps --report mps-niverel-report.json || true
           cat mps-report.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: mps-certification

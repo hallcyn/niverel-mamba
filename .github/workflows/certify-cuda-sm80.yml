@@ -30,7 +30,7 @@ jobs:
     runs-on: [self-hosted, linux, x64, cuda, sm80]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: report the GPU actually present
         run: |
@@ -49,7 +49,7 @@ jobs:
           print("architecture confirmed:", actual)
           PY
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           run-id: ${{ inputs.wheel_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -87,7 +87,7 @@ jobs:
             --report certification-sm80.json
           cat certification-sm80.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: certification-sm80
