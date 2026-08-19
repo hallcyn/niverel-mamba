@@ -27,6 +27,11 @@ classifiers = [
 dependencies = [
   "packaging>=24",
   "typing-extensions>=4.12",
+  # Certification utilities are core content (brief section 13), and both
+  # compare() and tensor_digest() need numpy. It is NOT in the same category as
+  # torch/mlx: those are large, mutually exclusive frameworks a user may not
+  # want, whereas numpy is small and is what makes the core actually usable.
+  "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
@@ -38,7 +43,6 @@ mlx = [
   "mlx>=0.32,<0.33; platform_system == 'Darwin' and platform_machine == 'arm64'",
 ]
 dev = [
-  "numpy>=1.26",
   # tomllib is stdlib only from 3.11; the packaging tests read pyproject.toml
   # and the matrix covers 3.10.
   "tomli>=2; python_version < '3.11'",

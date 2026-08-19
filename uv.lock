@@ -1166,6 +1166,9 @@ name = "niverel-mamba"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "packaging" },
     { name = "typing-extensions" },
 ]
@@ -1175,9 +1178,6 @@ dev = [
     { name = "build" },
     { name = "huggingface-hub" },
     { name = "mypy" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pytest" },
     { name = "pytest-xdist" },
     { name = "pyyaml" },
@@ -1201,7 +1201,7 @@ requires-dist = [
     { name = "huggingface-hub", marker = "extra == 'dev'", specifier = ">=0.25" },
     { name = "mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = ">=0.32,<0.33" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
-    { name = "numpy", marker = "extra == 'dev'", specifier = ">=1.26" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "packaging", specifier = ">=24" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3" },

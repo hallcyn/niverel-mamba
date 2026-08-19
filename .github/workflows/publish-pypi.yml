@@ -70,7 +70,27 @@ jobs:
           assert default_contract().upstream_version == '2.3.2.post1'
           print('cold install OK', niverel_mamba.__version__)
           "
-          niverel-mamba doctor
+
+      - name: the commands a user runs before installing anything else
+        # Regression guard: 0.1.0 pre-release, `doctor` crashed on a cold
+        # install with ModuleNotFoundError: numpy, pulled in transitively by
+        # `verify`. doctor exits 1 when no backend is usable, which is the
+        # correct answer here and not a failure of the command itself.
+        run: |
+          niverel-mamba doctor || [ $? -eq 1 ]
+          niverel-mamba inspect | grep -q 'in_proj.weight'
+          niverel-mamba --version
+
+      - name: verify must refuse cleanly without a framework, not traceback
+        run: |
+          set +e
+          out=$(niverel-mamba verify --fixture tiny 2>&1); code=$?
+          set -e
+          echo "$out"
+          [ $code -eq 2 ] || { echo "::error::expected exit 2, got $code"; exit 1; }
+          echo "$out" | grep -q "needs PyTorch" || { echo "::error::unclear message"; exit 1; }
+          echo "$out" | grep -qi "traceback" && { echo "::error::leaked a traceback"; exit 1; }
+          true
       - name: the torch extra must also install cleanly
         run: |
           python -m pip install "niverel-mamba[torch]"
