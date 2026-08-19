@@ -117,13 +117,27 @@ def test_publishing_jobs_request_an_oidc_token():
 
 
 def test_no_pypi_token_is_referenced_anywhere():
-    """A token in a workflow would defeat the point of Trusted Publishing."""
+    """A token in a workflow would defeat the point of Trusted Publishing.
+
+    `password:` is caught too, since that is how a token would be handed to
+    twine -- with one exception. Logging in to GHCR to store the Docker layer
+    cache genuinely needs a password field, and the only value tolerated there
+    is `secrets.GITHUB_TOKEN`: an ambient, job-scoped credential that expires
+    with the run, not a long-lived registry or index token.
+    """
     offenders = []
     for path in WORKFLOW_DIR.glob("*.yml"):
         text = path.read_text(encoding="utf-8")
-        for marker in ("PYPI_TOKEN", "PYPI_API_TOKEN", "TWINE_PASSWORD", "password:"):
+        for marker in ("PYPI_TOKEN", "PYPI_API_TOKEN", "TWINE_PASSWORD"):
             if marker in text:
                 offenders.append(f"{path.name} references {marker}")
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("password:"):
+                continue
+            value = stripped.split(":", 1)[1].strip()
+            if value != "${{ secrets.GITHUB_TOKEN }}":
+                offenders.append(f"{path.name} sets password to {value!r}")
     assert not offenders, offenders
 
 
