@@ -1,0 +1,113 @@
+name: build-cuda-wheels
+
+# Wheels are built here but are NEVER published from here. Publication requires
+# a GPU certification run (certify-cuda-sm80 / sm90) to have passed on the
+# resulting artefacts. A GPU is not needed to *compile* CUDA code, only to
+# trust it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "which build target to run (all, torch211-cu128, torch212-cu130, torch213-cu130)"
+        required: false
+        default: "all"
+  push:
+    tags: ["v*"]
+    paths:
+      - "docker/**"
+      - "scripts/build_upstream_cuda_wheels.py"
+      - ".github/workflows/build-cuda-wheels.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: torch211-cu128
+            dockerfile: docker/torch211-cu128.Dockerfile
+            torch: "2.11.0"
+            cuda: "12.8"
+            python_tag: cp312
+            arch_list: "8.0;9.0"
+          - name: torch212-cu130
+            dockerfile: docker/torch212-cu130.Dockerfile
+            torch: "2.12.1"
+            cuda: "13.0"
+            python_tag: cp312
+            arch_list: "8.0;9.0"
+          - name: torch213-cu130
+            dockerfile: docker/torch213-cu130.Dockerfile
+            torch: "2.13.0"
+            cuda: "13.0"
+            python_tag: cp312
+            arch_list: "8.0;9.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: build the wheels
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          # TORCH_CUDA_ARCH_LIST is deliberately narrow: building every NVIDIA
+          # architecture multiplies build time for architectures nobody has
+          # certified.
+          build-args: |
+            TORCH_CUDA_ARCH_LIST=${{ matrix.arch_list }}
+            MAMBA_SSM_VERSION=2.3.2.post1
+            CAUSAL_CONV1D_VERSION=1.6.2.post1
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          outputs: type=local,dest=./wheelhouse-${{ matrix.name }}
+
+      - name: write the binary manifest
+        run: |
+          python scripts/build_upstream_cuda_wheels.py manifest \
+            --wheelhouse "wheelhouse-${{ matrix.name }}" \
+            --torch-version "${{ matrix.torch }}" \
+            --torch-cuda "${{ matrix.cuda }}" \
+            --python-tag "${{ matrix.python_tag }}" \
+            --architectures "sm_80,sm_90" \
+            --source-commit "${{ github.sha }}" \
+            --build-workflow "${{ github.workflow }}#${{ github.run_id }}" \
+            --output "wheelhouse-${{ matrix.name }}/manifest.json"
+          cat "wheelhouse-${{ matrix.name }}/manifest.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cuda-wheels-${{ matrix.name }}
+          path: wheelhouse-${{ matrix.name }}/
+
+  cold-install:
+    # A wheel that cannot be installed into a clean environment is not a wheel.
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        name: [torch211-cu128, torch212-cu130, torch213-cu130]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cuda-wheels-${{ matrix.name }}
+          path: wheelhouse
+      - name: verify every recorded SHA-256
+        run: python scripts/verify_release_assets.py --wheelhouse wheelhouse
+      - name: install without compiling anything
+        run: |
+          python -m venv /tmp/cold
+          /tmp/cold/bin/pip install --no-deps --only-binary :all: wheelhouse/*.whl
+          echo "installed with no local compilation"

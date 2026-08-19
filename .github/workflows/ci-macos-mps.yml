@@ -1,0 +1,131 @@
+name: ci-macos-mps
+
+# Two jobs, deliberately separated, because they can only run in different
+# places:
+#
+#   macos-cpu   GitHub-hosted macos-14 (arm64). Real, useful coverage of the
+#               macOS CPU path -- but these runners cannot do MPS. Note the
+#               trap: they report `torch.backends.mps.is_available() == True`
+#               and then fail every allocation with
+#                   MPS backend out of memory ... Tried to allocate 21.00 KiB
+#               so trusting the flag runs the MPS suite against a device that
+#               cannot hold a tensor. `capabilities._probe_mps` therefore does
+#               a real allocation, and the MPS tests skip by name here.
+#
+#   macos-mps   A self-hosted Apple Silicon machine. This is what the brief
+#               anticipates ("runner Mac auto-hébergé") and the only way to
+#               genuinely certify MPS. It stays dormant until the repository
+#               variable HAS_SELF_HOSTED_MAC is set to 'true', so it does not
+#               sit pending forever on a repo that has no such runner.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  macos-cpu:
+    runs-on: macos-14
+    # Hosted macOS runners are far more concurrency-limited than Linux ones on
+    # a private repository: with three macOS jobs requested, exactly one starts
+    # and the rest die during allocation after ~30s, while ten concurrent
+    # Ubuntu jobs run happily. This job therefore shares one serialising
+    # concurrency group with ci-mlx, and no longer fans out over a torch
+    # matrix -- Linux already covers torch 2.11/2.12/2.13 across four Pythons,
+    # so a second macOS torch version buys little at 10x the billed minutes.
+    concurrency:
+      group: macos-hosted-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      TORCH_VERSION: "2.13.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: |
+          uv venv --python 3.12
+          uv pip install "torch==${TORCH_VERSION}"
+          uv pip install -e ".[dev]" einops
+      - name: report what the runner can do
+        run: uv run niverel-mamba doctor
+
+      - name: state plainly whether this runner can actually use MPS
+        # Informational, never fatal. Prints both the advertised flag and the
+        # real answer, because on hosted runners they disagree.
+        run: |
+          uv run python - <<'PY'
+          import torch
+          from niverel_mamba.capabilities import detect_environment
+          info = detect_environment().mps
+          print(f"::notice::is_available()={torch.backends.mps.is_available()} "
+                f"usable={info.available} detail={info.detail}")
+          if not info.available:
+              print("::notice::MPS certification requires the self-hosted job")
+          PY
+
+      - run: uv run python scripts/make_golden_fixture.py
+      - name: macOS CPU tests
+        run: uv run pytest tests/unit tests/torch_reference tests/gradients tests/release -q
+      - name: MPS tests (skip themselves by name when no device is present)
+        run: uv run pytest tests/mps -q
+      - name: certification on CPU
+        run: |
+          uv run niverel-mamba verify --fixture tiny
+          uv run niverel-mamba verify --fixture segmented --report macos-cpu-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-cpu-certification
+          path: macos-cpu-report.json
+
+  macos-mps:
+    # Set the repository variable HAS_SELF_HOSTED_MAC to 'true' once an Apple
+    # Silicon runner is registered with these labels.
+    if: vars.HAS_SELF_HOSTED_MAC == 'true'
+    runs-on: [self-hosted, macos, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: |
+          uv venv --python 3.12
+          uv pip install -e ".[torch,dev]"
+      - run: uv run niverel-mamba doctor
+
+      - name: MPS must actually be available here
+        # Fatal on this job only: a self-hosted Mac that cannot do MPS would
+        # produce a report labelled "mps" that never touched the GPU.
+        run: |
+          uv run python - <<'PY'
+          import sys, torch
+          if not torch.backends.mps.is_available():
+              sys.exit("::error::this self-hosted runner has no MPS device; "
+                       "refusing to publish a report labelled mps")
+          print("MPS confirmed:", torch.__version__)
+          PY
+
+      - run: uv run python scripts/make_golden_fixture.py
+      - name: real Foundation V3 fixture
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -n "$HF_TOKEN" ]; then
+            uv run python scripts/make_golden_fixture.py --only-niverel
+          else
+            echo "::warning::HF_TOKEN not set; the real V3 fixture will skip by name"
+          fi
+      - name: MPS tests
+        run: uv run pytest tests/mps tests/niverel -q
+      - name: MPS certification report
+        run: |
+          uv run niverel-mamba verify --fixture segmented --device mps --report mps-report.json
+          uv run niverel-mamba verify --fixture niverel --device mps --report mps-niverel-report.json || true
+          cat mps-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mps-certification
+          path: mps-*report.json

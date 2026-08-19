@@ -1,0 +1,53 @@
+{
+  "schema_version": "niverel-mamba-golden-fixture-v1",
+  "created_at_utc": "2026-08-17T16:57:20+00:00",
+  "fixture": "tiny",
+  "purpose": "float64 mathematical ground truth (brief 11.1, tier 1)",
+  "config": {
+    "d_model": 16,
+    "d_state": 4,
+    "d_conv": 4,
+    "expand": 2,
+    "headdim": 8,
+    "ngroups": 1,
+    "chunk_size": 4,
+    "bias": false,
+    "conv_bias": true,
+    "d_ssm": null,
+    "D_has_hdim": false,
+    "rmsnorm": true,
+    "norm_before_gate": false,
+    "norm_epsilon": 1e-05,
+    "dt_limit": [
+      0.0,
+      "inf"
+    ],
+    "conv_init": null,
+    "A_init_range": [
+      1.0,
+      16.0
+    ],
+    "dt_min": 0.001,
+    "dt_max": 0.1,
+    "dt_init_floor": 0.0001
+  },
+  "input_shape": [
+    1,
+    8,
+    16
+  ],
+  "seeds": {
+    "weights": 1337,
+    "input": 20260817
+  },
+  "tensor_sha256": {
+    "dt_bias": "99d9669bfae3b1bbd146e768273d69c99150ea29b6906dba91a1661b5696cb7f",
+    "A_log": "b8f6a86266aa2b9ebaa4a8c28307ce1ffef40abd759799e43455fcee30943365",
+    "D": "8cec63bcf94ecbff19fc2cadcf7ace8e49d90f6cad49d27e95868b3aa6dce2af",
+    "in_proj.weight": "3add0e4a09bec28d58afdae5954bd32ee524c8bfc2df1e7971dcf98243e59b74",
+    "conv1d.weight": "caa47a639ca6fe5ac98f91fbb0510e94bf0690cadf66c4f3c9c127878806041d",
+    "conv1d.bias": "0b98f51861bc7a00b3e4dfbc8f20030f7469c58cc4ccccd2e5c24adc920a525f",
+    "norm.weight": "6ccc4daba6852189ea8d8199c3866fed4a88d5a64aceb76f6bf22d2529b3defb",
+    "out_proj.weight": "cd97b2f5c737b9f6db045debe9acfb79441266b8e16338090c7d6f300fe2098d"
+  }
+}

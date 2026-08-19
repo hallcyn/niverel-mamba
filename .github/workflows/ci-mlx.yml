@@ -1,0 +1,40 @@
+name: ci-mlx
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  mlx:
+    runs-on: macos-14
+    # Shares one concurrency group with ci-macos-mps's hosted job: only one
+    # hosted macOS job may run at a time on this plan. See that workflow for
+    # the full explanation.
+    concurrency:
+      group: macos-hosted-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: install MLX plus torch (needed as the comparison reference)
+        run: |
+          uv venv --python 3.12
+          uv pip install -e ".[mlx,torch,dev]"
+      - run: uv run niverel-mamba doctor
+      - run: uv run python scripts/make_golden_fixture.py
+      - name: pure MLX tests, weight conversion, and parity against torch CPU
+        run: uv run pytest tests/mlx -q
+      - name: certification report
+        run: |
+          uv run niverel-mamba verify --fixture segmented --mlx --report mlx-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mlx-certification
+          path: mlx-report.json

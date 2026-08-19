@@ -1,0 +1,39 @@
+# Secrets — never commit. Contains HF_TOKEN.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.so
+
+# Environments
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Fixture tensors are generated, never committed (see fixtures/README.md).
+# The manifests under fixtures/golden-manifests/ carry the per-tensor SHA-256,
+# which is what a reviewer can actually diff; a binary blob is not.
+fixtures/**/*.safetensors
+fixtures/**/*.pt
+!fixtures/**/*.json
+
+*.whl
+checkpoints/
+_work/
+wheelhouse*/
+
+# OS
+.DS_Store

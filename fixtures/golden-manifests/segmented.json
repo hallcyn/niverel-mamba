@@ -1,0 +1,57 @@
+{
+  "schema_version": "niverel-mamba-golden-fixture-v1",
+  "created_at_utc": "2026-08-17T16:57:20+00:00",
+  "fixture": "segmented",
+  "purpose": "strict-reset and internal-padding coverage (brief 11.1, tier 2)",
+  "config": {
+    "d_model": 32,
+    "d_state": 8,
+    "d_conv": 4,
+    "expand": 2,
+    "headdim": 8,
+    "ngroups": 2,
+    "chunk_size": 16,
+    "bias": false,
+    "conv_bias": true,
+    "d_ssm": null,
+    "D_has_hdim": false,
+    "rmsnorm": true,
+    "norm_before_gate": false,
+    "norm_epsilon": 1e-05,
+    "dt_limit": [
+      0.0,
+      "inf"
+    ],
+    "conv_init": null,
+    "A_init_range": [
+      1.0,
+      16.0
+    ],
+    "dt_min": 0.001,
+    "dt_max": 0.1,
+    "dt_init_floor": 0.0001
+  },
+  "input_shape": [
+    2,
+    257,
+    32
+  ],
+  "seeds": {
+    "weights": 4242,
+    "input": 20260818
+  },
+  "documents_per_row": [
+    6,
+    5
+  ],
+  "tensor_sha256": {
+    "dt_bias": "bb904f8edaa4395b7bd59115bd443050ac2e3a081b071a4f5bd015cd44fe0e38",
+    "A_log": "b8e6b07d0d1fab0f8777dcb99c220770a91c368cc8bef19feac52ae268ab4510",
+    "D": "b1f466dbdc2d65240617f30fd53b22220873678fc655450f739143ffea4dd5b1",
+    "in_proj.weight": "34508a1a85097d18e1a33a8306221ce22287281077d963eff19cf09e4cb8be8e",
+    "conv1d.weight": "e7bbbdd1459f8e7f46b33568fde9388ee0aad3d0e0cdcf1f2239743a32b5af9b",
+    "conv1d.bias": "b21453fa68cc717b7a0e97438e7410ede5c2d0dc7e9946c080a5abcaa75771a1",
+    "norm.weight": "c58b41b7b43f4d173d4148476937acd1785b2070eb021776dcc2cb8709b250cc",
+    "out_proj.weight": "a348196dcc736bc2882b5953e023cbb76b87aaad03d9f26f363986e3758d6e8d"
+  }
+}
