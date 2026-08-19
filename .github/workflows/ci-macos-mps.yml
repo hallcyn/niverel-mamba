@@ -22,6 +22,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,13 +30,13 @@ permissions:
 jobs:
   macos-cpu:
     runs-on: macos-14
-    # Hosted macOS runners are far more concurrency-limited than Linux ones on
-    # a private repository: with three macOS jobs requested, exactly one starts
-    # and the rest die during allocation after ~30s, while ten concurrent
-    # Ubuntu jobs run happily. This job therefore shares one serialising
-    # concurrency group with ci-mlx, and no longer fans out over a torch
-    # matrix -- Linux already covers torch 2.11/2.12/2.13 across four Pythons,
-    # so a second macOS torch version buys little at 10x the billed minutes.
+    # Shares one serialising concurrency group with ci-mlx so at most one hosted
+    # macOS job runs at a time. macOS minutes count 10x against the included
+    # Actions quota, and these two jobs have no reason to overlap.
+    #
+    # It does not fan out over a torch matrix: Linux already covers torch
+    # 2.11/2.12/2.13 across Python 3.10-3.13, and what macOS adds is
+    # Apple-specific device behaviour, not another torch version.
     concurrency:
       group: macos-hosted-${{ github.ref }}
       cancel-in-progress: false

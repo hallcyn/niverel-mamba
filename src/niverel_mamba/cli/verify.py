@@ -19,17 +19,21 @@ from pathlib import Path
 from typing import Any
 
 from ..capabilities import detect_environment
-from ..certification.compare import compare
-from ..certification.golden import available_fixtures, load_fixture
-from ..certification.report import CertificationReport
-from ..errors import FixtureError
+from ..errors import BackendUnavailableError
 
 __all__ = ["add_parser", "run"]
+
+# Deliberately NOT imported at module level: `cli.main.build_parser()` imports
+# every subcommand so that `--help` can list them, so anything heavy here is
+# paid for by `doctor` and `inspect` too. A cold `pip install niverel-mamba`
+# followed by `niverel-mamba doctor` used to crash on numpy for exactly this
+# reason -- and a diagnostic command that dies on a missing dependency is
+# useless precisely when it is needed.
 
 
 def add_parser(subparsers: Any) -> Any:
     parser = subparsers.add_parser("verify", help="run numerical certification and write a report")
-    parser.add_argument("--fixture", default="tiny", help=f"one of {available_fixtures() or ['tiny']}")
+    parser.add_argument("--fixture", default="tiny", help="tiny, segmented or niverel")
     parser.add_argument("--report", type=Path, default=None, help="write the JSON report here")
     parser.add_argument("--device", default=None, help="also compare against this torch device")
     parser.add_argument("--mlx", action="store_true", help="also compare the MLX backend")
@@ -38,8 +42,18 @@ def add_parser(subparsers: Any) -> Any:
 
 
 def run(args: argparse.Namespace) -> int:
-    import torch
+    try:
+        import torch
+    except ImportError as exc:
+        raise BackendUnavailableError(
+            "verify needs PyTorch to run the reference implementation it certifies "
+            "against: pip install 'niverel-mamba[torch]'"
+        ) from exc
 
+    from ..certification.compare import compare
+    from ..certification.golden import load_fixture
+    from ..certification.report import CertificationReport
+    from ..errors import FixtureError
     from ..torch_ops.mamba2 import Mamba2
 
     try:
