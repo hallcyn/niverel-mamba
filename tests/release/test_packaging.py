@@ -77,14 +77,43 @@ print("VIOLATIONS:" + ",".join(sorted(set(violations))))
 
 
 def test_cli_help_does_not_import_frameworks():
+    """Building the parser must stay light.
+
+    `build_parser()` imports every subcommand so `--help` can list them, so any
+    heavy import in one subcommand is paid for by all of them. numpy is checked
+    alongside torch and mlx because of a real regression: a cold
+    `pip install niverel-mamba` followed by `niverel-mamba doctor` crashed with
+    ModuleNotFoundError: numpy, pulled in transitively by `verify`. A
+    diagnostic command must not die on a dependency it does not use.
+    """
     code = (
         "import sys; from niverel_mamba.cli.main import build_parser; build_parser(); "
-        "print('torch' in sys.modules, 'mlx' in sys.modules)"
+        "print('torch' in sys.modules, 'mlx' in sys.modules, 'numpy' in sys.modules)"
     )
     out = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, check=True, cwd=REPO_ROOT
     )
-    assert out.stdout.strip() == "False False", out.stdout
+    assert out.stdout.strip() == "False False False", out.stdout
+
+
+def test_doctor_and_inspect_need_only_the_core_install():
+    """The two commands a user runs before installing anything else.
+
+    Exercised here against the modules directly; publish-pypi.yml runs the same
+    commands against a genuinely cold install from the index.
+    """
+    code = (
+        "from niverel_mamba.cli.main import main; "
+        "import io, contextlib; buf = io.StringIO(); "
+        "contextlib.redirect_stdout(buf).__enter__(); "
+        "main(['doctor']); main(['inspect']); "
+        "print('OK' if 'in_proj.weight' in buf.getvalue() else 'MISSING', file=__import__('sys').stderr)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=REPO_ROOT
+    )
+    assert out.returncode == 0, out.stderr
+    assert "OK" in out.stderr, out.stderr
 
 
 def test_version_is_consistent():

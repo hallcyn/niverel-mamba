@@ -179,11 +179,11 @@ hosted runners, while `macos-mps` targets a self-hosted Apple Silicon machine an
 to emit a report labelled `mps` if that runner cannot use MPS either. The MPS figures below were measured on a local M1; enable the self-hosted job (set
 the repository variable `HAS_SELF_HOSTED_MAC`) to reproduce them on every push.
 
-Hosted macOS runners are also much more concurrency-limited than Linux ones, so the two
-hosted macOS jobs share a serialising concurrency group and run one at a time. Linux
-carries the torch matrix (2.11 / 2.12 / 2.13 across Python 3.10–3.13); macOS runs a
-single torch version, because a second one costs 10x the billed minutes for very little
-extra signal.
+The two hosted macOS jobs share a serialising concurrency group so at most one runs at a
+time: macOS minutes count 10× against the included Actions quota and the two have no
+reason to overlap. Both still gate every pull request. Linux carries the torch matrix
+(2.11 / 2.12 / 2.13 across Python 3.10–3.13); macOS runs a single torch version, because
+what it adds is Apple-specific device behaviour rather than another torch version.
 
 ### Measured tolerances
 

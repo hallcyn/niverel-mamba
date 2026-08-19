@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,9 +12,9 @@ permissions:
 jobs:
   mlx:
     runs-on: macos-14
-    # Shares one concurrency group with ci-macos-mps's hosted job: only one
-    # hosted macOS job may run at a time on this plan. See that workflow for
-    # the full explanation.
+    # Shares one serialising concurrency group with ci-macos-mps's hosted job:
+    # macOS minutes count 10x against the quota and the two have no reason to
+    # overlap. See that workflow for the full note.
     concurrency:
       group: macos-hosted-${{ github.ref }}
       cancel-in-progress: false
