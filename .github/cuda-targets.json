@@ -1,0 +1,29 @@
+{
+  "_comment": "Single source of truth for the CUDA build matrix. Read by build-cuda-wheels.yml's `plan` job so that one target can be built at a time; each entry compiles causal-conv1d and mamba-ssm for every listed architecture, which is hours of nvcc.",
+  "targets": [
+    {
+      "name": "torch211-cu128",
+      "dockerfile": "docker/torch211-cu128.Dockerfile",
+      "torch": "2.11.0",
+      "cuda": "12.8",
+      "python_tag": "cp312",
+      "arch_list": "8.0;9.0"
+    },
+    {
+      "name": "torch212-cu130",
+      "dockerfile": "docker/torch212-cu130.Dockerfile",
+      "torch": "2.12.1",
+      "cuda": "13.0",
+      "python_tag": "cp312",
+      "arch_list": "8.0;9.0"
+    },
+    {
+      "name": "torch213-cu130",
+      "dockerfile": "docker/torch213-cu130.Dockerfile",
+      "torch": "2.13.0",
+      "cuda": "13.0",
+      "python_tag": "cp312",
+      "arch_list": "8.0;9.0"
+    }
+  ]
+}
