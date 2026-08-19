@@ -34,6 +34,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -288,6 +289,90 @@ def find_mamba2_blocks(
     return candidates
 
 
+def _download_checkpoint(token: str, expected_sha: str) -> Path:
+    """Fetch ckpt.pt and prove it is the right bytes, retrying once.
+
+    Refusing a checkpoint whose hash does not match is the whole point, but a
+    bare mismatch says nothing about *why*, and this check runs on a rented GPU
+    where every extra data point costs another twenty minutes and another pod.
+
+    A certification run failed here on a hash that was neither the checkpoint,
+    an empty file, nor a git-lfs pointer, while the bytes on the Hub were
+    provably intact and a cold forced download elsewhere returned them
+    correctly. The message carried no size and no disk figure, so a truncated
+    download could not be told apart from a corrupt one without renting the GPU
+    again. Hence: compare the size the Hub declares before hashing a gigabyte
+    and a half, print how much disk is left, and say which transfer backend ran.
+
+    One retry, from scratch, ignoring the cache. A transfer that dropped is
+    worth retrying; a checkpoint that is genuinely the wrong one is not, and
+    two identical wrong hashes say so unambiguously.
+    """
+    from huggingface_hub import get_hf_file_metadata, hf_hub_download, hf_hub_url
+
+    try:
+        import hf_xet  # noqa: F401
+
+        backend = "xet" if os.environ.get("HF_HUB_DISABLE_XET") != "1" else "lfs (xet disabled)"
+    except ImportError:
+        backend = "lfs (hf_xet not installed)"
+
+    expected_size: int | None = None
+    try:
+        expected_size = get_hf_file_metadata(
+            hf_hub_url(NIVEREL_REPO, NIVEREL_CKPT, revision=NIVEREL_REVISION),
+            token=token,
+        ).size
+    except Exception as exc:  # the hash check below is the real gate
+        print(f"  (could not read the remote size: {exc})")
+
+    failures = []
+    for attempt in (1, 2):
+        print(
+            f"  downloading {NIVEREL_REPO}/{NIVEREL_CKPT} "
+            f"({expected_size if expected_size is not None else '~1.7 GB'} bytes, "
+            f"via {backend}, attempt {attempt}) ..."
+        )
+        path = Path(
+            hf_hub_download(
+                repo_id=NIVEREL_REPO,
+                filename=NIVEREL_CKPT,
+                revision=NIVEREL_REVISION,
+                token=token,
+                force_download=attempt > 1,
+            )
+        )
+        size = path.stat().st_size
+        free_gb = shutil.disk_usage(path.parent).free / 1024**3
+        print(f"  received {size} bytes, {free_gb:.1f} GiB free on that filesystem")
+
+        if expected_size is not None and size != expected_size:
+            failures.append(
+                f"attempt {attempt}: truncated, {size} bytes of {expected_size} "
+                f"({free_gb:.1f} GiB free)"
+            )
+            print(f"::warning::{failures[-1]}")
+            continue
+
+        print("  verifying SHA-256 against the bundle manifest ...")
+        actual_sha = sha256_file(path)
+        if actual_sha == expected_sha:
+            print(f"  ok  {actual_sha}")
+            return path
+        failures.append(f"attempt {attempt}: sha256 {actual_sha}, size {size}")
+        print(f"::warning::{failures[-1]}")
+
+    raise FixtureError(
+        "the checkpoint never matched the SHA-256 sealed in bundle_manifest.json.\n"
+        f"  manifest  {expected_sha}\n"
+        f"  expected size {expected_size}\n"
+        f"  transfer backend {backend}\n"
+        + "".join(f"  {line}\n" for line in failures)
+        + "  Two different hashes mean a broken transfer; two identical ones mean\n"
+        "  the checkpoint at that revision is not the one this fixture was sealed against."
+    )
+
+
 def build_niverel(force: bool = False) -> dict[str, Any]:
     from huggingface_hub import hf_hub_download
 
@@ -309,23 +394,7 @@ def build_niverel(force: bool = False) -> dict[str, Any]:
     if not expected_sha:
         raise FixtureError("bundle_manifest.json does not record a SHA-256 for ckpt.pt")
 
-    print(f"  downloading {NIVEREL_REPO}/{NIVEREL_CKPT} (~1.7 GB) ...")
-    ckpt_path = Path(
-        hf_hub_download(
-            repo_id=NIVEREL_REPO,
-            filename=NIVEREL_CKPT,
-            revision=NIVEREL_REVISION,
-            token=token,
-        )
-    )
-
-    print("  verifying SHA-256 against the bundle manifest ...")
-    actual_sha = sha256_file(ckpt_path)
-    if actual_sha != expected_sha:
-        raise FixtureError(
-            f"checkpoint SHA-256 mismatch:\n  manifest {expected_sha}\n  actual   {actual_sha}"
-        )
-    print(f"  ok  {actual_sha}")
+    ckpt_path = _download_checkpoint(token, expected_sha)
 
     checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state = _find_state_dict(checkpoint)
@@ -368,7 +437,9 @@ def build_niverel(force: bool = False) -> dict[str, Any]:
         "source_repository": NIVEREL_REPO,
         "source_revision": NIVEREL_REVISION,
         "source_file": NIVEREL_CKPT,
-        "source_sha256": actual_sha,
+        # Verified byte for byte by _download_checkpoint, which does not
+        # return unless the file hashes to exactly this.
+        "source_sha256": expected_sha,
         "run_id": manifest.get("receipt", {}).get("run_id"),
         "extracted_block": chosen,
         "blocks_available": sorted(blocks),

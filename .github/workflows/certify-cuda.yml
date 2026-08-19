@@ -102,9 +102,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: report the GPU actually present
+      - name: report the GPU and the disk actually present
+        # The disk matters as much as the GPU here: the fixture step pulls a
+        # 1.7 GB checkpoint, and every runtime installs its own CUDA torch.
         run: |
           nvidia-smi
+          df -h / "$HOME" 2>/dev/null || df -h /
           python3 -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_capability(0))" || true
 
       - name: refuse to run on the wrong architecture
