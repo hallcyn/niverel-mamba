@@ -53,6 +53,9 @@ jobs:
     uses: ./.github/workflows/build-cuda-wheels.yml
     permissions:
       contents: read
+      # The build pushes its layer cache to GHCR, and a callee can only ever
+      # downgrade what the caller grants.
+      packages: write
     with:
       target: all
     secrets: inherit
