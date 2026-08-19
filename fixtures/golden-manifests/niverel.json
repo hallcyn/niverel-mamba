@@ -1,0 +1,119 @@
+{
+  "schema_version": "niverel-mamba-golden-fixture-v1",
+  "created_at_utc": "2026-08-17T16:57:52+00:00",
+  "fixture": "niverel",
+  "purpose": "real Foundation V3 Mamba2 block (brief 11.1, tier 3)",
+  "source_repository": "thibaud-perrin/niverel-5b-v3-hnet-jepa-seed1337",
+  "source_revision": "5da95e264026d80fd6d8debb50c4ca4c40277483",
+  "source_file": "ckpt.pt",
+  "source_sha256": "8212105328253ab727496ac0514baebf8d7bd55ca9e1be5fc0393d83cea3fa53",
+  "run_id": "foundation-5b-v3-wave2-hnet-jepa-seed1337",
+  "extracted_block": "decoder.0.mixer",
+  "blocks_available": [
+    "decoder.0.mixer",
+    "decoder.1.mixer",
+    "decoder.2.mixer",
+    "decoder.3.mixer",
+    "decoder.4.mixer",
+    "decoder.5.mixer",
+    "decoder.6.mixer",
+    "decoder.7.mixer",
+    "encoder.0.mixer",
+    "encoder.1.mixer",
+    "encoder.2.mixer",
+    "encoder.3.mixer",
+    "tgt_encoder.0.mixer",
+    "tgt_encoder.1.mixer",
+    "tgt_encoder.2.mixer",
+    "tgt_encoder.3.mixer"
+  ],
+  "config": {
+    "d_model": 768,
+    "d_state": 128,
+    "d_conv": 4,
+    "expand": 2,
+    "headdim": 64,
+    "ngroups": 1,
+    "chunk_size": 256,
+    "bias": false,
+    "conv_bias": true,
+    "d_ssm": null,
+    "D_has_hdim": false,
+    "rmsnorm": true,
+    "norm_before_gate": false,
+    "norm_epsilon": 1e-05,
+    "dt_limit": [
+      0.0,
+      "inf"
+    ],
+    "conv_init": null,
+    "A_init_range": [
+      1.0,
+      16.0
+    ],
+    "dt_min": 0.001,
+    "dt_max": 0.1,
+    "dt_init_floor": 0.0001,
+    "metadata": {
+      "source": "niverel-5b-v3-hnet-jepa-seed1337",
+      "note": "headdim/ngroups/chunk_size are never passed by Niverel, so upstream defaults apply"
+    }
+  },
+  "input_shape": [
+    1,
+    96,
+    768
+  ],
+  "input_seed": 1337,
+  "tensor_dtypes": {
+    "D": "torch.float32",
+    "in_proj.weight": "torch.float32",
+    "A_log": "torch.float32",
+    "norm.weight": "torch.float32",
+    "dt_bias": "torch.float32",
+    "conv1d.bias": "torch.float32",
+    "conv1d.weight": "torch.float32",
+    "out_proj.weight": "torch.float32"
+  },
+  "tensor_shapes": {
+    "D": [
+      24
+    ],
+    "in_proj.weight": [
+      3352,
+      768
+    ],
+    "A_log": [
+      24
+    ],
+    "norm.weight": [
+      1536
+    ],
+    "dt_bias": [
+      24
+    ],
+    "conv1d.bias": [
+      1792
+    ],
+    "conv1d.weight": [
+      1792,
+      1,
+      4
+    ],
+    "out_proj.weight": [
+      768,
+      1536
+    ]
+  },
+  "tensor_sha256": {
+    "D": "9bc0852d7e8a397601381587eeb3347d7c51de559a1c91609dc9cb449eab2d09",
+    "in_proj.weight": "433792e0cb7bb70f510a91214ce6bfb03aa1f9614d191c4d7ba6ebdcec5fbdaa",
+    "A_log": "252fefa4a5f759a8df214ffc686cfe2d94adbaad848d8b5bf377010ab3109fa5",
+    "norm.weight": "efb54642e0c8994177ed49cf7a24a3bba0e27b7d34eab8d1a78ac47c5f38748a",
+    "dt_bias": "d71a09a577c0d53de28e08ceea112d5262f892c5717249d18ba73b5d7f712564",
+    "conv1d.bias": "22e092684c6cedb3c84776e512a9ace17bffb17c4ff659cacd22e4a669a46e38",
+    "conv1d.weight": "aa8810864c4044236a6abfc54d98f9c00a5e1a7c552114dd70784d194094131c",
+    "out_proj.weight": "f620c04313ede1844efb89219204bccfcc4525ae7e4fc121762576dc64d8e524"
+  },
+  "note": "The full checkpoint is never committed. Only this single block and its provenance are versioned; block.safetensors itself is gitignored and rebuilt by this script."
+}

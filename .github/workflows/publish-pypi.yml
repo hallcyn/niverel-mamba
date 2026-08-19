@@ -1,0 +1,85 @@
+name: publish-pypi
+
+# Trusted Publishing over OIDC. There is no PyPI token anywhere in this
+# repository, and there is not meant to be one.
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: "pypi or testpypi"
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "pypi or testpypi"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.repository }}
+      url: ${{ inputs.repository == 'pypi' && 'https://pypi.org/p/niverel-mamba' || 'https://test.pypi.org/p/niverel-mamba' }}
+    permissions:
+      id-token: write        # the only credential used
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: ${{ inputs.repository == 'testpypi' && 'https://test.pypi.org/legacy/' || '' }}
+
+  cold-install:
+    # Publishing is not done until a clean machine can install and use it.
+    needs: publish
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - name: wait for the index to catch up
+        run: sleep 60
+      - name: install from the index it was just published to
+        run: |
+          INDEX=""
+          if [ "${{ inputs.repository }}" = "testpypi" ]; then
+            INDEX="--index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/"
+          fi
+          python -m pip install $INDEX niverel-mamba
+      - name: smoke test the core install
+        run: |
+          python -c "
+          import sys, niverel_mamba
+          from niverel_mamba import Mamba2Config, default_contract
+          assert 'torch' not in sys.modules and 'mlx' not in sys.modules
+          c = Mamba2Config(d_model=768, d_state=128, d_conv=4, expand=2)
+          assert (c.d_inner, c.nheads, c.d_in_proj) == (1536, 24, 3352)
+          assert default_contract().upstream_version == '2.3.2.post1'
+          print('cold install OK', niverel_mamba.__version__)
+          "
+          niverel-mamba doctor
+      - name: the torch extra must also install cleanly
+        run: |
+          python -m pip install "niverel-mamba[torch]"
+          python -c "
+          import torch
+          from niverel_mamba.torch import Mamba2
+          from niverel_mamba import Mamba2Config
+          m = Mamba2(Mamba2Config(d_model=32, d_state=8, headdim=8, chunk_size=8))
+          y = m(torch.randn(1, 12, 32))
+          assert y.shape == (1, 12, 32)
+          print('torch extra OK')
+          "

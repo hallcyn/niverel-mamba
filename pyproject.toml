@@ -1,0 +1,138 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "niverel-mamba"
+version = "0.1.0"
+description = "Portable, verifiable, multi-backend Mamba2 runtime: one weight contract, several backends, explicit certification."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Hallcyn" }]
+keywords = ["mamba", "mamba2", "ssm", "state-space", "mlx", "mps", "pytorch"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# The core package is deliberately framework-free: an MLX-only user must not
+# download PyTorch, and a PyTorch-only user must not download MLX.
+dependencies = [
+  "packaging>=24",
+  "typing-extensions>=4.12",
+]
+
+[project.optional-dependencies]
+torch = [
+  "torch>=2.11,<2.14",
+  "einops>=0.8",
+]
+mlx = [
+  "mlx>=0.32,<0.33; platform_system == 'Darwin' and platform_machine == 'arm64'",
+]
+dev = [
+  "numpy>=1.26",
+  # tomllib is stdlib only from 3.11; the packaging tests read pyproject.toml
+  # and the matrix covers 3.10.
+  "tomli>=2; python_version < '3.11'",
+  "pytest>=8",
+  "pytest-xdist>=3",
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "build>=1.2",
+  "twine>=5",
+  "safetensors>=0.4",
+  "huggingface-hub>=0.25",
+  "pyyaml>=6",
+]
+
+[project.scripts]
+niverel-mamba = "niverel_mamba.cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/hallcyn/niverel-mamba"
+Repository = "https://github.com/hallcyn/niverel-mamba"
+Changelog = "https://github.com/hallcyn/niverel-mamba/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/niverel_mamba"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/niverel_mamba",
+  "schemas",
+  "tests",
+  "scripts",
+  "README.md",
+  "LICENSE",
+  "NOTICE",
+  "THIRD_PARTY_NOTICES.md",
+  "CHANGELOG.md",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+  "E501",    # line length is handled by the formatter
+  "B905",    # zip(strict=) is 3.10+, we target 3.10
+  "RUF001",  # ambiguous unicode in docstrings (maths notation)
+  "RUF002",
+  "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]
+
+[tool.mypy]
+# numpy 2.5's bundled stubs use `type` statements, which mypy only parses under
+# 3.12+. Ruff still targets py310 (see [tool.ruff] above) and ci-torch-matrix
+# actually runs the tests on 3.10-3.13, so real 3.10 compatibility is enforced
+# by execution rather than by this setting.
+python_version = "3.12"
+files = ["src"]
+strict = true
+warn_unreachable = true
+# torch / mlx are optional extras; their absence must not fail the type check.
+ignore_missing_imports = true
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+# These modules depend on the optional torch / mlx extras. ci-core type-checks
+# the package with NEITHER installed, so `nn.Module` resolves to `Any` there and
+# the two rules below would fire on code that is perfectly typed once the extra
+# is present. Relaxing exactly these two keeps the check meaningful in both
+# configurations rather than passing in only one.
+module = ["niverel_mamba.torch_ops.*", "niverel_mamba.mlx_ops.*", "niverel_mamba.backends.*"]
+disallow_untyped_defs = true
+disallow_any_unimported = false
+disallow_subclassing_any = false
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+# The suite shares helpers via `from tests.conftest import ...`, which needs the
+# repository root importable. `python -m pytest` adds the CWD implicitly, but
+# `pytest` / `uv run pytest` do not -- so state it rather than depend on how the
+# runner happens to be invoked.
+pythonpath = ["."]
+markers = [
+  "slow: long-running tests (L8192 and above)",
+  "mps: requires an available PyTorch MPS device",
+  "mlx: requires MLX on Apple Silicon",
+  "cuda: requires an NVIDIA GPU plus the cuda-reference backend",
+  "niverel: requires the real Niverel Foundation V3 fixture",
+]
