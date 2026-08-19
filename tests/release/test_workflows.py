@@ -108,12 +108,55 @@ def test_callers_grant_every_permission_their_callees_request():
     assert not problems, "\n".join(problems)
 
 
+def _publishing_jobs() -> dict[str, dict[str, Any]]:
+    """Every job that runs the PyPI upload action, wherever it lives."""
+    found = {}
+    for name, workflow in _workflows().items():
+        for job_id, job in workflow["jobs"].items():
+            for step in job.get("steps") or []:
+                if "gh-action-pypi-publish" in str(step.get("uses", "")):
+                    found[f"{name}:{job_id}"] = job
+    return found
+
+
 def test_publishing_jobs_request_an_oidc_token():
     """Trusted Publishing is the only sanctioned route; it needs id-token."""
+    jobs = _publishing_jobs()
+    assert jobs, "no publishing job found"
+    for where, job in jobs.items():
+        assert job.get("permissions", {}).get("id-token") == "write", where
+        assert job.get("environment", {}).get("name"), where
+
+
+def test_publishing_never_happens_from_a_reusable_workflow():
+    """PyPI cannot verify an attestation produced by a reusable workflow.
+
+    It checks the PEP 740 certificate's Build Config URI, which names the
+    **entry** workflow, against the Trusted Publisher, which it matched using
+    `job_workflow_ref` -- the **reusable** one. With a reusable publisher those
+    two disagree by construction and the upload is refused:
+
+        Certificate's Build Config URI (... /release.yml@refs/tags/v0.1.0)
+        does not match expected Trusted Publisher (publish-pypi.yml @ ...)
+
+    That is pypa/gh-action-pypi-publish#283, and it cost a release that had
+    already paid for two GPU certifications. The upload step therefore has to
+    stay in a workflow that is never `uses:`-ed by another.
+    """
     workflows = _workflows()
-    publish = workflows["publish-pypi.yml"]["jobs"]["publish"]
-    assert publish.get("permissions", {}).get("id-token") == "write"
-    assert publish.get("environment", {}).get("name")
+    called = {
+        job["uses"].split("/")[-1]
+        for workflow in workflows.values()
+        for job in workflow["jobs"].values()
+        if str(job.get("uses", "")).startswith("./.github/workflows/")
+    }
+    offenders = [
+        where for where in _publishing_jobs() if where.split(":")[0] in called
+    ]
+    assert not offenders, (
+        f"these jobs upload to PyPI from a reusable workflow: {offenders}. "
+        "PyPI will reject the attestation."
+    )
 
 
 def test_no_pypi_token_is_referenced_anywhere():
@@ -154,11 +197,25 @@ def test_cuda_wheels_are_not_built_on_every_tag():
 
 
 def test_release_publishes_to_testpypi_before_pypi():
-    """The ordering is the safety property: a cold install gates the real index."""
+    """The ordering is the safety property: a cold install gates the real index.
+
+    Checked transitively, because the chain runs through the cold-install job
+    that is the entire point of publishing to TestPyPI first.
+    """
     jobs = _workflows()["release.yml"]["jobs"]
-    needs = jobs["publish-pypi"]["needs"]
-    needs = [needs] if isinstance(needs, str) else needs
-    assert "publish-testpypi" in needs
+    reached, frontier = set(), {"publish-pypi"}
+    while frontier:
+        reached |= frontier
+        frontier = {
+            need
+            for job_id in frontier
+            for need in _needs(jobs[job_id])
+            if need not in reached
+        }
+    assert "publish-testpypi" in reached
+    assert any(job_id.startswith("cold-install") for job_id in reached), (
+        "PyPI must be gated by a cold install from TestPyPI"
+    )
 
 
 def _needs(job: dict[str, Any]) -> list[str]:

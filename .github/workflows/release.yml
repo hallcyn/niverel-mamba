@@ -27,12 +27,22 @@ on:
       tag:
         description: "existing tag to release, e.g. v0.1.0"
         required: true
+      publish_only:
+        description: >
+          publish a tag that was already built and certified, without rebuilding
+          or re-renting a GPU. The certification reports attached to the release
+          are re-checked before anything is uploaded.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   build-core:
+    # Everything up to and including github-release is skipped when
+    # re-publishing an already-certified tag.
+    if: ${{ !inputs.publish_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -50,6 +60,7 @@ jobs:
 
   build-cuda:
     needs: build-core
+    if: ${{ !cancelled() && !inputs.publish_only && needs.build-core.result == 'success' }}
     uses: ./.github/workflows/build-cuda-wheels.yml
     permissions:
       contents: read
@@ -62,6 +73,7 @@ jobs:
 
   certify-sm80:
     needs: build-cuda
+    if: ${{ !cancelled() && !inputs.publish_only && needs.build-cuda.result == 'success' }}
     uses: ./.github/workflows/certify-cuda.yml
     permissions:
       contents: read
@@ -75,6 +87,7 @@ jobs:
     # for no gain, and if sm80 already found a regression there is nothing to
     # learn from paying for an H100 to find the same one.
     needs: certify-sm80
+    if: ${{ !cancelled() && !inputs.publish_only && needs.certify-sm80.result == 'success' }}
     uses: ./.github/workflows/certify-cuda.yml
     permissions:
       contents: read
@@ -85,6 +98,7 @@ jobs:
 
   github-release:
     needs: [build-core, build-cuda, certify-sm80, certify-sm90]
+    if: ${{ !cancelled() && !inputs.publish_only && needs.certify-sm90.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -185,23 +199,74 @@ jobs:
 
   publish-testpypi:
     needs: github-release
-    # A called workflow can only downgrade the caller's permissions, so
-    # `id-token: write` has to be granted here; declaring it only inside
-    # publish-pypi.yml leaves Trusted Publishing without a token.
+    # `github-release` is skipped in publish_only mode, and a skip propagates,
+    # so this has to state its own condition rather than inherit success().
+    if: ${{ !cancelled() && (inputs.publish_only || needs.github-release.result == 'success') }}
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/niverel-mamba
+    # Inline, not a reusable workflow. PyPI verifies the PEP 740 attestation
+    # against the certificate's Build Config URI, which names the *entry*
+    # workflow, while it matches the Trusted Publisher against
+    # `job_workflow_ref`, which names the reusable one. Publishing from a
+    # reusable workflow makes those two disagree by construction, and the upload
+    # is refused: "Certificate's Build Config URI ... does not match expected
+    # Trusted Publisher". See pypa/gh-action-pypi-publish#283.
+    #
+    # So the Trusted Publisher for this project is `release.yml`, on both
+    # indexes, and it must stay that way.
     permissions:
       contents: read
-      id-token: write
-    uses: ./.github/workflows/publish-pypi.yml
+      id-token: write        # the only credential used; there is no token
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: ./.github/actions/collect-distributions
+        with:
+          publish_only: ${{ inputs.publish_only }}
+          tag: ${{ inputs.tag || github.ref_name }}
+          github_token: ${{ github.token }}
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  cold-install-testpypi:
+    needs: publish-testpypi
+    if: ${{ !cancelled() && needs.publish-testpypi.result == 'success' }}
+    uses: ./.github/workflows/cold-install.yml
+    permissions:
+      contents: read
     with:
       repository: testpypi
-    secrets: inherit
 
   publish-pypi:
-    needs: publish-testpypi
+    needs: cold-install-testpypi
+    if: ${{ !cancelled() && needs.cold-install-testpypi.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/niverel-mamba
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/publish-pypi.yml
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: ./.github/actions/collect-distributions
+        with:
+          publish_only: ${{ inputs.publish_only }}
+          tag: ${{ inputs.tag || github.ref_name }}
+          github_token: ${{ github.token }}
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  cold-install-pypi:
+    needs: publish-pypi
+    if: ${{ !cancelled() && needs.publish-pypi.result == 'success' }}
+    uses: ./.github/workflows/cold-install.yml
+    permissions:
+      contents: read
     with:
       repository: pypi
-    secrets: inherit

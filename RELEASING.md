@@ -50,15 +50,55 @@ publisher on <https://pypi.org/manage/account/publishing/> and again on
 | PyPI project name | `niverel-mamba` |
 | Owner | `hallcyn` |
 | Repository name | `niverel-mamba` |
-| Workflow name | `publish-pypi.yml` |
+| Workflow name | `release.yml` |
 | Environment name | `pypi` on PyPI, `testpypi` on TestPyPI |
 
-The environment name matters: `publish-pypi.yml` derives `environment.name`
-from its input, and PyPI refuses the exchange on a mismatch.
+**The workflow name must be `release.yml`, the entry workflow -- not the file
+the upload step happens to live in.** The upload used to sit in a reusable
+`publish-pypi.yml`, and that cannot work. PyPI matches the trusted publisher
+using `job_workflow_ref`, which names the reusable workflow, but verifies the
+PEP 740 attestation against the certificate's Build Config URI, which names the
+workflow that was *triggered*. With a reusable publisher those two disagree by
+construction, and the upload is refused:
+
+```
+Certificate's Build Config URI (.../release.yml@refs/tags/v0.1.0)
+does not match expected Trusted Publisher (publish-pypi.yml @ hallcyn/niverel-mamba)
+```
+
+That is [pypa/gh-action-pypi-publish#283][283], and it cost a release that had
+already paid for both GPU certifications. The upload therefore lives inline in
+`release.yml`, and a test refuses any future attempt to move it back into a
+reusable workflow.
+
+[283]: https://github.com/pypa/gh-action-pypi-publish/issues/283
+
+The environment name matters too: the publishing jobs declare `pypi` and
+`testpypi`, and PyPI refuses the exchange on a mismatch.
 
 There is no PyPI token anywhere in this repository and there should never be
 one. A token is a long-lived credential that can be exfiltrated; an OIDC
 exchange is scoped to one workflow run of one repository.
+
+## Re-publishing a tag that was already certified
+
+If a release fails *after* certification -- as one did, on the PyPI upload --
+do not re-run the whole workflow. Certification rents two GPUs, and a run that
+already produced passing reports has nothing left to prove.
+
+Instead dispatch `release.yml` on the same tag with **publish_only** ticked:
+
+```console
+$ gh workflow run release.yml -f tag=v0.1.0 -f publish_only=true
+```
+
+Everything up to and including `github-release` is skipped. The distributions
+are taken from the release assets rather than rebuilt, and before anything is
+uploaded the certification reports attached to that release are re-read and
+must all pass, covering both sm80 and sm90. `publish_only` is a way to avoid
+paying twice, never a way to publish something uncertified -- the script that
+enforces that is extracted from the workflow and executed by
+`tests/release/test_publish_only_guard.py`.
 
 ### 2. GitHub environments
 

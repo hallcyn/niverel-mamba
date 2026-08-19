@@ -1,7 +1,13 @@
-name: publish-pypi
+name: cold-install
 
-# Trusted Publishing over OIDC. There is no PyPI token anywhere in this
-# repository, and there is not meant to be one.
+# Installing from the index it was just published to, on a clean machine.
+#
+# This is reusable, and may stay reusable: it uses no OIDC. The *publishing*
+# job cannot, which is why it lives inline in release.yml -- PyPI verifies an
+# attestation against `workflow_ref`, the entry workflow, while it matches the
+# Trusted Publisher against `job_workflow_ref`, the reusable one. With a
+# reusable publisher the two can never agree, and the upload is rejected with
+# "Certificate's Build Config URI does not match expected Trusted Publisher".
 
 on:
   workflow_call:
@@ -10,37 +16,12 @@ on:
         description: "pypi or testpypi"
         type: string
         required: true
-  workflow_dispatch:
-    inputs:
-      repository:
-        description: "pypi or testpypi"
-        type: choice
-        options: [testpypi, pypi]
-        default: testpypi
 
 permissions:
   contents: read
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
-    environment:
-      name: ${{ inputs.repository }}
-      url: ${{ inputs.repository == 'pypi' && 'https://pypi.org/p/niverel-mamba' || 'https://test.pypi.org/p/niverel-mamba' }}
-    permissions:
-      id-token: write        # the only credential used
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: dist
-          path: dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: ${{ inputs.repository == 'testpypi' && 'https://test.pypi.org/legacy/' || '' }}
-
   cold-install:
-    # Publishing is not done until a clean machine can install and use it.
-    needs: publish
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
