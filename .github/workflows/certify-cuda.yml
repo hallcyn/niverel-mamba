@@ -154,7 +154,16 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python3 -m venv .venv-fixtures
-          .venv-fixtures/bin/pip install --quiet -e ".[dev]"
+          # torch is deliberately not a core dependency -- an MLX user must not
+          # have to download it -- so `.[dev]` alone leaves the fixture builder
+          # without it. The CPU build, not the CUDA one: these fixtures are the
+          # portable golden reference, they are computed on CPU by design, and
+          # pulling three gigabytes of CUDA torch onto a billing GPU to produce
+          # them would be paying for nothing. The certified runtimes get their
+          # own CUDA torch, one venv each, further down.
+          .venv-fixtures/bin/pip install --quiet "torch>=2.11,<2.14" \
+            --index-url https://download.pytorch.org/whl/cpu
+          .venv-fixtures/bin/pip install --quiet -e ".[torch,dev]"
           .venv-fixtures/bin/python scripts/make_golden_fixture.py
           if [ -n "$HF_TOKEN" ]; then
             .venv-fixtures/bin/python scripts/make_golden_fixture.py --only-niverel
