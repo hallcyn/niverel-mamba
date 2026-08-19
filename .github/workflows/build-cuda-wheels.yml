@@ -6,6 +6,15 @@ name: build-cuda-wheels
 # trust it.
 
 on:
+  # Callable so that release.yml can build in the same run: the wheels then
+  # land as artifacts the certification and release jobs can read directly,
+  # with no run id to thread through.
+  workflow_call:
+    inputs:
+      target:
+        required: false
+        type: string
+        default: all
   workflow_dispatch:
     inputs:
       target:
