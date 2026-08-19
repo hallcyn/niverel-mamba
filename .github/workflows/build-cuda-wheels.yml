@@ -100,7 +100,7 @@ jobs:
         name: [torch211-cu128, torch212-cu130, torch213-cu130]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: cuda-wheels-${{ matrix.name }}
           path: wheelhouse
