@@ -15,17 +15,34 @@ from tests.conftest import requires_cuda, requires_torch
 pytestmark = requires_torch
 
 
+def _upstream_is_installed() -> bool:
+    """The condition the backend itself branches on -- deliberately not `import`.
+
+    These two tests guard the *absence* path, so they must skip whenever the
+    wheels are present. The obvious guard, `try: import mamba_ssm`, is wrong,
+    and wrong in a way that cost a GPU run: on the certification pod the wheels
+    were installed and `import mamba_ssm` still raised ImportError, because
+    upstream's `__init__` reaches `transformers`, which `--no-deps` does not
+    bring. So both tests ran the absence path in an environment where the
+    backend was present, and failed.
+
+    `load_upstream_mamba2` decides on installed *metadata*, so that is what
+    decides here too. When metadata says present but the import is broken it
+    raises a different, equally correct BackendUnavailableError -- covered by
+    its own test below rather than by these.
+    """
+    from niverel_mamba.capabilities import detect_environment
+
+    return detect_environment().upstream_mamba_ssm.available
+
+
 def test_backend_refuses_to_build_without_the_wheels():
     """No silent fallback -- the single most important guarantee."""
 
     from niverel_mamba.backends.cuda_reference import load_upstream_mamba2
     from niverel_mamba.errors import BackendUnavailableError
 
-    try:
-        import mamba_ssm  # noqa: F401
-    except ImportError:
-        pass
-    else:
+    if _upstream_is_installed():
         pytest.skip("mamba-ssm is installed, so the absence path cannot be exercised")
 
     with pytest.raises(BackendUnavailableError) as excinfo:
@@ -40,11 +57,7 @@ def test_error_names_the_install_command():
     from niverel_mamba.backends.cuda_reference import load_upstream_mamba2
     from niverel_mamba.errors import BackendUnavailableError
 
-    try:
-        import mamba_ssm  # noqa: F401
-    except ImportError:
-        pass
-    else:
+    if _upstream_is_installed():
         pytest.skip("mamba-ssm is installed")
 
     with pytest.raises(BackendUnavailableError, match="install-backend cuda"):

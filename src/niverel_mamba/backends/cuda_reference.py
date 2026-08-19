@@ -23,7 +23,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ..capabilities import Capability, Certification, detect_environment
+from ..capabilities import (
+    UPSTREAM_RUNTIME_REQUIREMENTS,
+    Capability,
+    Certification,
+    detect_environment,
+    upstream_mamba2_importable,
+)
 from ..config import Mamba2Config
 from ..errors import BackendUnavailableError
 from ..weights import validate_state_dict
@@ -55,10 +61,18 @@ def load_upstream_mamba2() -> Any:
             "cuda-reference requires a visible CUDA device; torch reports none. "
             "This package will not fall back to CPU."
         )
-    try:
-        from mamba_ssm.modules.mamba2 import Mamba2 as UpstreamMamba2
-    except ImportError as exc:  # pragma: no cover - needs a CUDA box
-        raise BackendUnavailableError(f"mamba-ssm is installed but unimportable: {exc}") from exc
+    importable, why = upstream_mamba2_importable()
+    if not importable:
+        raise BackendUnavailableError(
+            f"mamba-ssm is installed but will not import: {why}\n"
+            "Upstream's own __init__ reaches these at import time, and its wheel "
+            "does not install them (the wheels must be installed with --no-deps, "
+            "which is what protects your pinned torch build):\n"
+            f"  pip install {' '.join(UPSTREAM_RUNTIME_REQUIREMENTS)}\n"
+            "This package will not fall back to another backend."
+        )
+    from mamba_ssm.modules.mamba2 import Mamba2 as UpstreamMamba2
+
     return UpstreamMamba2
 
 

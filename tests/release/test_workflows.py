@@ -422,3 +422,43 @@ def test_every_job_building_fixtures_installs_torch():
                     )
                     break
     assert not problems, "\n".join(problems)
+
+
+def test_certification_proves_the_backend_imports_in_a_fresh_process():
+    """Installed, importable, and importable *from a clean interpreter* differ.
+
+    Upstream's `__init__` imports `modules.mamba2` before the line that can
+    fail, so a failed package import leaves that submodule in `sys.modules` and
+    every later import in the same process succeeds from cache. A certification
+    run passed its CUDA parity tests exactly that way, against a backend that no
+    fresh process could load.
+
+    Nothing inside the pytest session can detect that -- by the time a test
+    runs, the cache may already be poisoned. Only a separate interpreter, before
+    anything else touches mamba_ssm, can prove it, so the workflow must contain
+    that step and must install what upstream needs to import.
+    """
+    steps = _workflows()["certify-cuda.yml"]["jobs"]["certify"]["steps"]
+    # Comments are stripped deliberately: a first version of this assertion was
+    # satisfied by the comment *explaining* why transformers is installed, and
+    # so passed a workflow with the install removed.
+    script = "".join(
+        line
+        for step in steps
+        for line in str(step.get("run", "")).splitlines(keepends=True)
+        if not line.strip().startswith("#")
+    )
+
+    assert any(
+        "transformers" in line and ("pip" in line and "install" in line)
+        for line in script.splitlines()
+    ), (
+        "the certification venvs must install upstream's import-time requirements; "
+        "--no-deps leaves them out and the package then fails to import"
+    )
+
+    probe = "from mamba_ssm.modules.mamba2 import Mamba2"
+    assert probe in script, "certification must import upstream Mamba2 in a fresh process"
+    assert script.index(probe) < script.index("-m pytest"), (
+        "the fresh-process import must run before pytest, which can poison sys.modules"
+    )

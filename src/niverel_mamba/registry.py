@@ -17,7 +17,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .capabilities import Capability, Certification, Environment, detect_environment
+from .capabilities import (
+    Capability,
+    Certification,
+    Environment,
+    detect_environment,
+    upstream_mamba2_importable,
+)
 from .errors import BackendUnavailableError, UnknownBackendError
 
 __all__ = [
@@ -195,6 +201,13 @@ def _available_devices(spec: BackendSpec, env: Environment) -> tuple[bool, str |
             return False, "CUDA backend incomplete (causal-conv1d is absent)", ()
         if not env.cuda.available:
             return False, "no CUDA device is visible", ()
+        # Installed is not importable. Reporting "yes" on the strength of a
+        # .dist-info would be exactly the unproven claim this package refuses:
+        # a backend that cannot be imported by a fresh process is not available,
+        # however complete its metadata looks.
+        importable, why = upstream_mamba2_importable()
+        if not importable:
+            return False, f"mamba-ssm is installed but will not import ({why})", ()
         return True, None, ("cuda",)
 
     if spec.name == "mlx":
