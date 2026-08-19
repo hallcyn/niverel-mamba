@@ -85,8 +85,36 @@ class RunpodError(RuntimeError):
     """The RunPod API refused, or answered something we cannot act on."""
 
 
+def _auth_guidance(method: str, url: str, code: int) -> str:
+    """Say which of the two plausible causes a 401/403 actually is.
+
+    The REST API lives on `rest.runpod.io`, which matches neither of the
+    permission groups RunPod shows when creating a key -- those are
+    `api.runpod.io/graphql` and `api.runpod.ai`. So a key that reads fine can
+    still be refused for writes, and a key scoped to the wrong group is refused
+    outright. Guessing between the two wastes a release; probing takes one
+    request.
+    """
+    if method == "GET":
+        return ""
+    try:
+        _request("GET", "/pods")
+    except RunpodError:
+        return (
+            "\n  A read was refused too, so the key is not accepted on "
+            f"{API_ROOT} at all. Either it is malformed -- check the secret for a "
+            "trailing newline -- or its permissions do not cover this host. "
+            "Grant Read/Write on api.runpod.io as well as api.runpod.ai."
+        )
+    return (
+        "\n  A read succeeded, so the key is valid but not allowed to write. "
+        "Grant Read/Write rather than Read only on the group covering "
+        f"{API_ROOT}."
+    )
+
+
 def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
-    key = os.environ.get("RUNPOD_API_KEY")
+    key = (os.environ.get("RUNPOD_API_KEY") or "").strip()
     if not key:
         raise RunpodError(
             "RUNPOD_API_KEY is not set. In CI it comes from the repository secret of "
@@ -101,9 +129,11 @@ def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> A
         with urllib.request.urlopen(request, timeout=90) as response:
             body = response.read()
     except urllib.error.HTTPError as exc:
-        raise RunpodError(
-            f"{method} {url} -> HTTP {exc.code}: {exc.read().decode(errors='replace')[:400]}"
-        ) from exc
+        detail = exc.read().decode(errors="replace")[:400]
+        message = f"{method} {url} -> HTTP {exc.code}: {detail or '(empty body)'}"
+        if exc.code in (401, 403):
+            message += _auth_guidance(method, url, exc.code)
+        raise RunpodError(message) from exc
     except urllib.error.URLError as exc:
         raise RunpodError(f"{method} {url} unreachable: {exc.reason}") from exc
     return json.loads(body) if body.strip() else {}
@@ -289,6 +319,7 @@ def main() -> int:
     make.add_argument("--wait", action="store_true")
 
     sub.add_parser("terminate", parents=[common])
+    sub.add_parser("check-credentials")
     guard = sub.add_parser("assert-none-running")
     guard.add_argument("--prefix", default=POD_PREFIX)
 
@@ -309,6 +340,10 @@ def main() -> int:
                 wait_until_running(arch=args.arch, run_id=args.run_id)
         elif args.command == "terminate":
             terminate(arch=args.arch, run_id=args.run_id)
+        elif args.command == "check-credentials":
+            pods = list_pods()
+            print(f"reads work: {len(pods)} pod(s) visible on {API_ROOT}")
+            print("writes are not exercised here -- doing so would rent a GPU.")
         else:
             return assert_none_running(args.prefix)
     except RunpodError as exc:

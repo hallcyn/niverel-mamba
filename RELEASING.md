@@ -111,7 +111,7 @@ Nothing to install. The pod boots straight into a GitHub runner registered
 
 | secret | needed by | why |
 |---|---|---|
-| `RUNPOD_API_KEY` | `certify-cuda.yml` | creating and destroying the pods |
+| `RUNPOD_API_KEY` | `certify-cuda.yml` | creating and destroying the pods. **Read/Write**, and note that the REST API lives on `rest.runpod.io`, which is neither of the two permission groups RunPod names when you create a key. A key restricted to `api.runpod.ai` alone is refused with a bare `HTTP 401`. If a create fails that way, `python3 scripts/runpod_pod.py check-credentials` says whether reads work, which distinguishes a read-only key from one that does not cover the host at all |
 | `RUNNER_PAT` | `certify-cuda.yml` | **required.** A fine-grained PAT limited to this repository with **Administration: read and write** as its only permission |
 
 `RUNNER_PAT` cannot be avoided. Registering a self-hosted runner is a

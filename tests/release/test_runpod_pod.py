@@ -194,3 +194,83 @@ def test_missing_api_key_is_refused(monkeypatch):
 def test_list_pods_accepts_the_shapes_the_api_has_used(monkeypatch, shape):
     monkeypatch.setattr(runpod_pod, "_request", lambda *a, **k: shape)
     assert runpod_pod.list_pods() == []
+
+
+# --------------------------------------------------------------------------
+# Authentication diagnostics
+# --------------------------------------------------------------------------
+
+
+def _http_error(code):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError("u", code, "err", {}, io.BytesIO(b""))
+
+
+def test_a_write_refusal_says_whether_reads_still_work(monkeypatch):
+    """401 on a write is ambiguous, and guessing wrong wastes a release.
+
+    The REST API is on `rest.runpod.io`, which matches neither permission group
+    RunPod offers when creating a key. So the message has to distinguish "the
+    key is not accepted here at all" from "the key is read-only".
+    """
+    calls = []
+
+    def _urlopen(request, timeout=0):
+        calls.append(request.get_method())
+        if request.get_method() == "GET":
+            return _FakeResponse(b"[]")
+        raise _http_error(401)
+
+    monkeypatch.setattr(runpod_pod.urllib.request, "urlopen", _urlopen)
+    with pytest.raises(runpod_pod.RunpodError) as excinfo:
+        runpod_pod._request("POST", "/pods", {"name": "x"})
+    assert "key is valid but not allowed to write" in str(excinfo.value)
+    assert "GET" in calls, "the diagnostic must actually probe a read"
+
+
+def test_a_total_refusal_points_at_the_host_and_at_whitespace(monkeypatch):
+    def _urlopen(request, timeout=0):
+        raise _http_error(401)
+
+    monkeypatch.setattr(runpod_pod.urllib.request, "urlopen", _urlopen)
+    with pytest.raises(runpod_pod.RunpodError) as excinfo:
+        runpod_pod._request("POST", "/pods", {"name": "x"})
+    message = str(excinfo.value)
+    assert "not accepted on" in message
+    assert "trailing newline" in message
+
+
+def test_a_read_refusal_does_not_probe_itself(monkeypatch):
+    """Otherwise a refused GET would recurse."""
+    calls = []
+
+    def _urlopen(request, timeout=0):
+        calls.append(request.get_method())
+        raise _http_error(403)
+
+    monkeypatch.setattr(runpod_pod.urllib.request, "urlopen", _urlopen)
+    with pytest.raises(runpod_pod.RunpodError):
+        runpod_pod._request("GET", "/pods")
+    assert calls == ["GET"]
+
+
+def test_whitespace_around_the_key_is_stripped(monkeypatch):
+    """A secret pasted with a trailing newline is a classic 401."""
+    seen = {}
+
+    def _urlopen(request, timeout=0):
+        seen["auth"] = request.get_header("Authorization")
+        return _FakeResponse(b"[]")
+
+    monkeypatch.setenv("RUNPOD_API_KEY", "  abc123\n")
+    monkeypatch.setattr(runpod_pod.urllib.request, "urlopen", _urlopen)
+    runpod_pod._request("GET", "/pods")
+    assert seen["auth"] == "Bearer abc123"
+
+
+class _FakeResponse:
+    def __init__(self, body): self._body = body
+    def read(self): return self._body
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
