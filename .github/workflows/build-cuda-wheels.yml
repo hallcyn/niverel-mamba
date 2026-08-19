@@ -13,7 +13,7 @@ on:
         required: false
         default: "all"
   push:
-    tags: ["v*"]
+    branches: [main]
     paths:
       - "docker/**"
       - "scripts/build_upstream_cuda_wheels.py"

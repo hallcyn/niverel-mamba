@@ -40,6 +40,15 @@ jobs:
     # success is what allows the wheels to be attached to the release.
     needs: build-core
     if: inputs.wheel_run_id != ''
+    # certify-cuda-sm80.yml needs `actions: read` to download artefacts from
+    # the nominated build run. A caller must grant everything the callee
+    # requests, and this is validated when the FILE is parsed -- the `if:`
+    # above does not save you. Getting it wrong makes the whole release
+    # workflow refuse to start with "requesting 'actions: read', but is only
+    # allowed 'actions: none'".
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/certify-cuda-sm80.yml
     with:
       wheel_run_id: ${{ inputs.wheel_run_id }}
