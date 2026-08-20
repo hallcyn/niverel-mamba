@@ -194,3 +194,17 @@ def test_missing_api_key_is_refused(monkeypatch):
 def test_list_pods_accepts_the_shapes_the_api_has_used(monkeypatch, shape):
     monkeypatch.setattr(runpod_pod, "_request", lambda *a, **k: shape)
     assert runpod_pod.list_pods() == []
+
+
+def test_the_pod_must_offer_a_cuda_13_driver():
+    """Two of the three runtimes are built against CUDA 13.0.
+
+    Left unset, RunPod rents whatever is free. One pod came back advertising
+    CUDA 12.4 and both cu130 runtimes died in `torch._C._cuda_init()` after the
+    wheels had been installed; the pod before it advertised 12.8 and would have
+    failed the same way had it got that far.
+    """
+    payload = runpod_pod._create_payload(**VALID)
+    assert payload["allowedCudaVersions"] == ["13.0"], (
+        "the pod request must constrain the driver, or the rental can be unusable"
+    )
