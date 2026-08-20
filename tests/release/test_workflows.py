@@ -669,3 +669,30 @@ def test_the_certification_summary_runs_the_same_gate_as_the_release():
     script = "".join(str(step.get("run", "")) for step in steps)
     assert "verify_certification_reports.py" in script
     assert "--require-backend" in script and "cuda-reference" in script
+
+
+def test_the_cuda_gate_is_float32_and_bfloat16_is_only_measured():
+    """The verdict must be about the algorithm, not about a number format.
+
+    Two A100 runs established that a bfloat16 comparison sits against the limit
+    of bfloat16 whatever the implementation: at equal data the residue was
+    mean_abs 2.88e-03 on outputs of RMS one, against bfloat16's own 0.39% of
+    relative precision. Gating on it certifies nothing and fails correct code.
+
+    So `comparisons` -- which is what `passed` is computed from -- must carry the
+    float32 campaign, and the bfloat16 numbers must live in metadata, where they
+    inform without deciding.
+    """
+    source = (
+        Path(__file__).resolve().parent.parent.parent
+        / "src" / "niverel_mamba" / "cli" / "verify.py"
+    ).read_text(encoding="utf-8")
+
+    gated = re.findall(r'tolerance="(cuda_[a-z0-9_]+)"', source)
+    assert gated, "the CUDA campaign scores nothing"
+    assert set(gated) == {"cuda_float32"}, (
+        f"the CUDA gate must be float32 only, found {sorted(set(gated))}"
+    )
+    assert 'report.metadata["bfloat16_measured"]' in source, (
+        "bfloat16 must still be measured and reported, just not gated"
+    )

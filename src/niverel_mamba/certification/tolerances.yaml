@@ -67,6 +67,27 @@ classes:
       mlx_chunked_vs_sequential_max_abs: 3.6e-6
       mlx_forward_vs_step_max_abs: 8.6e-6
 
+  cuda_float32:
+    atol: 1.0e-4
+    rtol: 1.0e-3
+    rel_floor: 1.0e-3
+    description: >-
+      cuda-reference against torch-reference, both in float32, on the same GPU.
+      This is the certification gate, and it is a gate on the *algorithm*: in
+      float32 a disagreement between two chunked implementations can only come
+      from reassociation, chunk boundaries, or how a segment reset is applied.
+      Anything genuinely wrong -- a mishandled reset above all -- produces an
+      O(1) difference and cannot hide under this band, while float32
+      reassociation across a 257-step scan lands orders of magnitude below it.
+      The portable implementation measured against itself across CPU and CUDA
+      gives 1.55e-06 on this fixture, which is the scale reassociation alone
+      reaches.
+      NOT YET MEASURED between the two implementations. This is a starting
+      value; once a run has measured it, it is to be sealed *downwards* onto the
+      observation. Tightening is always allowed. Widening a band because a run
+      failed is not, and is what turned the bfloat16 comparison below into a
+      measurement rather than a criterion.
+
   cuda_bfloat16:
     atol: 2.0e-2
     rtol: 2.0e-2
@@ -83,9 +104,15 @@ classes:
       A100 running the real kernels gave 3.03e-02 and eleven. No correct
       bfloat16 implementation could ever have passed that comparison, so the
       comparison was changed rather than the band.
-      STILL NOT MEASURED at equal data. These remain the brief's starting
-      values, carried unchanged, and the cuda-reference backend is published
-      as `experimental` precisely
+      NO LONGER A GATE. Two A100 runs established that this comparison
+      measures bfloat16 rather than the kernels: at equal data the residue is
+      mean_abs 2.88e-03 on outputs of RMS one -- 0.29% against bfloat16's own
+      0.39% of relative precision -- so it sits against the limit of the format
+      whatever the implementation. The deviation is measured on every run and
+      written into the report under `bfloat16_measured`, as information for
+      anyone choosing bfloat16. The gate is `cuda_float32` above. These values
+      remain the brief's, carried unchanged and never widened, and the
+      cuda-reference backend is published as `experimental` precisely
       because this row is unverified. certify-cuda-sm80.yml must replace the
       `observed` block below before that status may change.
     observed: null

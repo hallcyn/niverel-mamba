@@ -67,10 +67,14 @@ def test_error_names_the_install_command():
 @requires_cuda
 @pytest.mark.cuda
 def test_cuda_matches_torch_reference():
-    """Parity against the portable backend under cuda_bfloat16 tolerances.
+    """Parity against the portable backend, in float32.
 
-    Until this runs on a real sm80/sm90 GPU, the cuda_bfloat16 tolerance class
-    has no observed data and cuda-reference stays published as experimental.
+    float32 deliberately, not bfloat16. In float32 a disagreement between two
+    chunked implementations is algebraic and a tight band means something; in
+    bfloat16 the comparison measures the number format. This test used to run in
+    bfloat16 and passed on an A100 -- on a config and length where it happened
+    to fit, while the certification fixture did not. That was luck, not
+    agreement, and it hid the problem rather than finding it.
     """
     import torch
 
@@ -87,18 +91,15 @@ def test_cuda_matches_torch_reference():
     # segmented fixture that loss alone is max_abs 3.0e-02, outside this band,
     # with no CUDA involved at all.
     portable = Mamba2(config).cuda().float().eval()
-    portable.load_state_dict(
-        {k: v.bfloat16().float() for k, v in portable.state_dict().items()}, strict=True
-    )
-    cuda = CudaReferenceBackend(config, device="cuda", dtype=torch.bfloat16)
+    cuda = CudaReferenceBackend(config, device="cuda", dtype=torch.float32)
     cuda.load_canonical_weights(portable.state_dict())
 
-    x_bf16 = torch.randn(1, 256, config.d_model, device="cuda").bfloat16()
+    x = torch.randn(1, 256, config.d_model, device="cuda")
     with torch.no_grad():
-        expected = portable(x_bf16.float())
-        actual = cuda.forward(x_bf16)
+        expected = portable(x)
+        actual = cuda.forward(x)
 
-    result = compare(actual.float(), expected, name="forward", tolerance="cuda_bfloat16")
+    result = compare(actual.float(), expected, name="forward", tolerance="cuda_float32")
     assert result.passed, result.detail
 
 
@@ -114,21 +115,18 @@ def test_cuda_seq_idx_reset_matches():
 
     config = niverel_v3_config()
     portable = Mamba2(config).cuda().float().eval()
-    portable.load_state_dict(
-        {k: v.bfloat16().float() for k, v in portable.state_dict().items()}, strict=True
-    )
-    cuda = CudaReferenceBackend(config, device="cuda", dtype=torch.bfloat16)
+    cuda = CudaReferenceBackend(config, device="cuda", dtype=torch.float32)
     cuda.load_canonical_weights(portable.state_dict())
 
     length = 512
-    x_bf16 = torch.randn(1, length, config.d_model, device="cuda").bfloat16()
+    x = torch.randn(1, length, config.d_model, device="cuda")
     seq_idx = torch.zeros(1, length, dtype=torch.int32, device="cuda")
     seq_idx[0, 137:] = 1
     seq_idx[0, 300:] = 2
 
     with torch.no_grad():
-        expected = portable(x_bf16.float(), seq_idx=seq_idx)
-        actual = cuda.forward(x_bf16, seq_idx=seq_idx)
+        expected = portable(x, seq_idx=seq_idx)
+        actual = cuda.forward(x, seq_idx=seq_idx)
 
-    result = compare(actual.float(), expected, name="segment_reset", tolerance="cuda_bfloat16")
+    result = compare(actual.float(), expected, name="segment_reset", tolerance="cuda_float32")
     assert result.passed, result.detail
