@@ -637,3 +637,35 @@ def test_a_release_can_reuse_wheels_it_did_not_build():
     assert "inputs.wheel_run_id" in str(download["with"]["run-id"]), (
         "the release must attach the wheels from the run that was certified"
     )
+
+
+def test_certify_only_stops_before_anything_is_released_or_published():
+    """Evidence about a tag that is already out, without a doomed second upload.
+
+    Re-certifying v0.1.0 to produce the CUDA reports it never had would
+    otherwise run all the way to the PyPI upload and fail there, because the
+    version already exists. The mode exists so the run ends where the answer is.
+    """
+    jobs = _workflows()["release.yml"]["jobs"]
+    assert "certify_only" in str(jobs["github-release"].get("if")), (
+        "github-release must be skipped in certify_only mode"
+    )
+    # Publishing hangs off github-release, so it must not have a route around it.
+    for job_id in ("publish-testpypi", "cold-install-testpypi", "publish-pypi"):
+        condition = str(jobs[job_id].get("if"))
+        assert "needs." in condition, f"{job_id} must depend on an upstream result"
+    testpypi = str(jobs["publish-testpypi"]["if"])
+    assert "needs.github-release.result == 'success'" in testpypi, (
+        "publishing must require github-release to have actually run"
+    )
+    assert "certify-sm90" in str(jobs["certification-summary"]["needs"]), (
+        "the summary must wait for both architectures"
+    )
+
+
+def test_the_certification_summary_runs_the_same_gate_as_the_release():
+    """A certify_only run must answer the question it was started to answer."""
+    steps = _workflows()["release.yml"]["jobs"]["certification-summary"]["steps"]
+    script = "".join(str(step.get("run", "")) for step in steps)
+    assert "verify_certification_reports.py" in script
+    assert "--require-backend" in script and "cuda-reference" in script

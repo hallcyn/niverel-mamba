@@ -114,6 +114,20 @@ $ gh workflow run release.yml -f tag=v0.1.1 -f wheel_run_id=32304273715
 `build-cuda` is skipped, and both the certification and the release read their
 wheels from that run -- so the wheels attached are the wheels certified.
 
+**Producing evidence without releasing.** To certify a tag that is already
+published -- as v0.1.0 needed, having shipped without any CUDA report:
+
+```console
+$ gh workflow run release.yml -f tag=v0.1.0 \
+    -f wheel_run_id=32304273715 -f certify_only=true
+```
+
+It stops after the reports. Nothing is released, nothing is uploaded, and a
+final job runs the same gate the release runs and prints every measured error to
+the run summary -- so a tolerance can be sealed from evidence rather than from
+the brief's starting values. Without it the run would continue to the PyPI
+upload and fail there, because that version already exists.
+
 **Rehearsing the certification for nothing.** `ci-certify-rehearsal.yml` runs
 everything the pod does except the numerical comparison, on a free Linux runner,
 installing the wheels from the published release. Three certification runs have

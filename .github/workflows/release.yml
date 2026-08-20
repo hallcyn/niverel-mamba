@@ -35,6 +35,13 @@ on:
           minutes per runtime.
         required: false
         default: ""
+      certify_only:
+        description: >
+          stop after the certification reports. Nothing is released and nothing
+          is published -- for producing evidence about a tag that is already
+          out, without a second upload attempt failing at the end.
+        type: boolean
+        default: false
       publish_only:
         description: >
           publish a tag that was already built and certified, without rebuilding
@@ -108,7 +115,7 @@ jobs:
 
   github-release:
     needs: [build-core, build-cuda, certify-sm80, certify-sm90]
-    if: ${{ !cancelled() && !inputs.publish_only && needs.certify-sm90.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.publish_only && !inputs.certify_only && needs.certify-sm90.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -212,6 +219,44 @@ jobs:
             certification/*
           generate_release_notes: true
           fail_on_unmatched_files: false
+
+  certification-summary:
+    # What the two pods established, read back in one place. It runs the same
+    # gate the release runs, so a certify_only run answers the only question it
+    # was started to answer: can this tag be released at all.
+    needs: [certify-sm80, certify-sm90]
+    if: ${{ !cancelled() && inputs.certify_only && needs.certify-sm90.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: certification-*
+          path: certification
+          # Safe to merge: every report embeds its architecture and its
+          # certified backend in its filename, so nothing collides.
+          merge-multiple: true
+
+      - name: what was certified
+        run: |
+          python scripts/verify_certification_reports.py --dir certification \
+            --require-arch sm80,sm90 --require-backend cuda-reference,torch-reference-cpu-chunked
+
+      - name: the measured errors, so a tolerance can be sealed from evidence
+        if: always()
+        run: |
+          python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          print("| report | candidate | max_abs | max_rel | passed |")
+          print("|---|---|---|---|---|")
+          for path in sorted(pathlib.Path("certification").glob("*.json")):
+              d = json.loads(path.read_text())
+              print(f"| {path.name} | {d['candidate_backend']} | "
+                    f"{d['max_abs_error']:.3e} | {d['max_rel_error']:.3e} | "
+                    f"{'yes' if d['passed'] else 'NO'} |")
+          PY
 
   publish-testpypi:
     needs: github-release
