@@ -161,6 +161,53 @@ jobs:
       - name: verify every SHA-256, in every wheelhouse
         run: python3 scripts/verify_release_assets.py --wheelhouse wheelhouse
 
+      - name: the driver must be new enough for every runtime we certify
+        # Five seconds here, or fifteen minutes and three gigabytes of torch
+        # before `torch._C._cuda_init()` fails. Drivers are backward compatible
+        # and not forward: a 13.x driver runs a cu128 build, a 12.x driver
+        # cannot run CUDA 13.0 at all, because that is a major version.
+        #
+        # `allowedCudaVersions` on the pod request is what should prevent this.
+        # This step is the check that the request was honoured, because a pod
+        # once came back advertising CUDA 12.4 and the one before it 12.8 --
+        # which would have failed the same way had it reached the second
+        # runtime.
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re, subprocess, sys
+
+          smi = subprocess.run(["nvidia-smi"], capture_output=True, text=True).stdout
+          found = re.search(r"CUDA Version:\s*([0-9]+)\.([0-9]+)", smi)
+          if not found:
+              sys.exit("::error::could not read the driver's CUDA version from nvidia-smi")
+          driver = (int(found.group(1)), int(found.group(2)))
+          print(f"this pod's driver supports CUDA {driver[0]}.{driver[1]} "
+                f"(major {driver[0]}, which is what decides)")
+
+          too_new = []
+          for manifest in sorted(pathlib.Path("wheelhouse").rglob("manifest.json")):
+              cuda = json.loads(manifest.read_text())["artifacts"][0]["torch_cuda"]
+              # Majors only. CUDA minor version compatibility means a cu12.8
+              # build runs on any 12.x driver -- which is exactly what happened
+              # on the 12.4 pod, where torch211-cu128 ran and only the cu130
+              # runtimes died. Comparing minors would reject a usable pod and
+              # throw the rental away.
+              needed = int(cuda.split(".")[0])
+              name = manifest.parent.name
+              ok = needed <= driver[0]
+              print(f"  {name}: built for CUDA {cuda}  {'ok' if ok else 'TOO NEW FOR THIS DRIVER'}")
+              if not ok:
+                  too_new.append(f"{name} (CUDA {cuda})")
+
+          if too_new:
+              sys.exit(
+                  f"::error::this pod's driver is CUDA {driver[0]}.x, "
+                  f"so {', '.join(too_new)} cannot run on it. The pod request asks for "
+                  f"allowedCudaVersions=13.0; either RunPod did not honour it or "
+                  f"scripts/runpod_pod.py no longer sends it."
+              )
+          PY
+
       - name: build fixtures, including the real Foundation V3 block
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}

@@ -61,6 +61,17 @@ GPUS_BY_ARCH: dict[str, list[str]] = {
     ],
 }
 
+#: The pod's *driver* must be new enough for every runtime we certify, and two
+#: of the three are built against CUDA 13.0. A driver is backward compatible --
+#: a 13.x driver runs a cu128 build -- but not forward: a 12.x driver cannot run
+#: CUDA 13.0 at all, because that is a major version, not a minor one.
+#:
+#: Left unset, RunPod rents whatever is free. One pod came back advertising CUDA
+#: 12.4 and torch cu130 died on `torch._C._cuda_init()` after the wheels had
+#: been installed. The pod before it advertised 12.8 and would have failed the
+#: same way had it reached the second runtime.
+REQUIRED_CUDA_VERSIONS = ["13.0"]
+
 RUNNING_STATES = frozenset({"RUNNING", "STARTING", "CREATED", "RESTARTING"})
 
 #: Boots the pod straight into an ephemeral runner. `--ephemeral` is what makes
@@ -156,6 +167,7 @@ def _create_payload(
         "gpuTypeIds": GPUS_BY_ARCH[arch],
         "gpuCount": 1,
         "cloudType": "SECURE",
+        "allowedCudaVersions": REQUIRED_CUDA_VERSIONS,
         "countryCodes": country_codes,
         "containerDiskInGb": disk_gb,
         "volumeInGb": volume_gb,
@@ -195,7 +207,7 @@ def create(
         disk_gb=disk_gb,
         country_codes=country_codes or ["US"],
     )
-    print(f"creating {name} ({arch}: {', '.join(GPUS_BY_ARCH[arch])})")
+    print(f"creating {name} ({arch}: {', '.join(GPUS_BY_ARCH[arch])}; CUDA {'/'.join(REQUIRED_CUDA_VERSIONS)})")
     pod = _request("POST", "/pods", payload)
     pod_id = pod.get("id")
     if not pod_id:
