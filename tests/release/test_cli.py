@@ -71,8 +71,8 @@ def test_install_backend_plans_without_installing(capsys, tmp_path):
     """Without --yes the command must never download or install anything."""
     manifest = tmp_path / "m.json"
     manifest.write_text(json.dumps({
-        "schema_version": "niverel-mamba-binary-manifest-v1",
-        "artifacts": [],
+        "schema_version": "niverel-mamba-cuda-index-v1",
+        "runtimes": [],
     }))
     code = main(["install-backend", "cuda", "--manifest", str(manifest)])
     out = capsys.readouterr().out

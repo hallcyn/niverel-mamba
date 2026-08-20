@@ -27,6 +27,21 @@ on:
       tag:
         description: "existing tag to release, e.g. v0.1.0"
         required: true
+      wheel_run_id:
+        description: >
+          reuse the CUDA wheels built by this run id instead of rebuilding them.
+          The wheels are upstream's, at pinned versions, from unchanged
+          Dockerfiles -- a rebuild produces the same artefact and costs seventy
+          minutes per runtime.
+        required: false
+        default: ""
+      certify_only:
+        description: >
+          stop after the certification reports. Nothing is released and nothing
+          is published -- for producing evidence about a tag that is already
+          out, without a second upload attempt failing at the end.
+        type: boolean
+        default: false
       publish_only:
         description: >
           publish a tag that was already built and certified, without rebuilding
@@ -60,7 +75,7 @@ jobs:
 
   build-cuda:
     needs: build-core
-    if: ${{ !cancelled() && !inputs.publish_only && needs.build-core.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.publish_only && !inputs.wheel_run_id && needs.build-core.result == 'success' }}
     uses: ./.github/workflows/build-cuda-wheels.yml
     permissions:
       contents: read
@@ -73,13 +88,14 @@ jobs:
 
   certify-sm80:
     needs: build-cuda
-    if: ${{ !cancelled() && !inputs.publish_only && needs.build-cuda.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.publish_only && needs.build-cuda.result != 'failure' && needs.build-cuda.result != 'cancelled' }}
     uses: ./.github/workflows/certify-cuda.yml
     permissions:
       contents: read
       actions: read
     with:
       arch: sm80
+      wheel_run_id: ${{ inputs.wheel_run_id }}
     secrets: inherit
 
   certify-sm90:
@@ -87,21 +103,23 @@ jobs:
     # for no gain, and if sm80 already found a regression there is nothing to
     # learn from paying for an H100 to find the same one.
     needs: certify-sm80
-    if: ${{ !cancelled() && !inputs.publish_only && needs.certify-sm80.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.publish_only && needs.certify-sm80.result != 'failure' && needs.certify-sm80.result != 'cancelled' }}
     uses: ./.github/workflows/certify-cuda.yml
     permissions:
       contents: read
       actions: read
     with:
       arch: sm90
+      wheel_run_id: ${{ inputs.wheel_run_id }}
     secrets: inherit
 
   github-release:
     needs: [build-core, build-cuda, certify-sm80, certify-sm90]
-    if: ${{ !cancelled() && !inputs.publish_only && needs.certify-sm90.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.publish_only && !inputs.certify_only && needs.certify-sm90.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read          # to read artifacts from a nominated wheel run
     steps:
       - uses: actions/checkout@v7
         with:
@@ -119,6 +137,10 @@ jobs:
       - name: fetch the certified CUDA wheels
         uses: actions/download-artifact@v8
         with:
+          # From the run that built them when one is nominated, so a release
+          # that reuses wheels attaches the very wheels that were certified.
+          run-id: ${{ inputs.wheel_run_id || github.run_id }}
+          github-token: ${{ github.token }}
           pattern: cuda-wheels-*
           path: cuda-wheels
           # NOT merged: every target ships a manifest.json and wheels with
@@ -154,6 +176,19 @@ jobs:
           done
           ls -l assets
 
+      - name: build the index install-backend downloads
+        # The per-runtime build manifests carry `"url": null` -- at build time
+        # nothing knows where the artefact will be published. This runs when the
+        # answer is known and writes one index naming each archive, its URL and
+        # its SHA-256, plus the SHA-256 of every wheel inside it.
+        run: |
+          python scripts/build_release_manifest.py \
+            --wheelhouse cuda-wheels --assets assets \
+            --tag "${{ inputs.tag || github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --output assets/cuda-manifest.json
+          cat assets/cuda-manifest.json
+
       - name: list exactly what will be attached
         run: |
           echo "distributions:"; ls -l dist
@@ -184,6 +219,44 @@ jobs:
             certification/*
           generate_release_notes: true
           fail_on_unmatched_files: false
+
+  certification-summary:
+    # What the two pods established, read back in one place. It runs the same
+    # gate the release runs, so a certify_only run answers the only question it
+    # was started to answer: can this tag be released at all.
+    needs: [certify-sm80, certify-sm90]
+    if: ${{ !cancelled() && inputs.certify_only && needs.certify-sm90.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: certification-*
+          path: certification
+          # Safe to merge: every report embeds its architecture and its
+          # certified backend in its filename, so nothing collides.
+          merge-multiple: true
+
+      - name: what was certified
+        run: |
+          python scripts/verify_certification_reports.py --dir certification \
+            --require-arch sm80,sm90 --require-backend cuda-reference,torch-reference-cpu-chunked
+
+      - name: the measured errors, so a tolerance can be sealed from evidence
+        if: always()
+        run: |
+          python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          print("| report | candidate | max_abs | max_rel | passed |")
+          print("|---|---|---|---|---|")
+          for path in sorted(pathlib.Path("certification").glob("*.json")):
+              d = json.loads(path.read_text())
+              print(f"| {path.name} | {d['candidate_backend']} | "
+                    f"{d['max_abs_error']:.3e} | {d['max_rel_error']:.3e} | "
+                    f"{'yes' if d['passed'] else 'NO'} |")
+          PY
 
   publish-testpypi:
     needs: github-release

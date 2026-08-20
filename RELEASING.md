@@ -97,6 +97,46 @@ landed in. `scripts/verify_certification_reports.py` now refuses a release whose
 reports do not certify `cuda-reference` on both sm80 and sm90, and it refuses
 v0.1.0's own reports when pointed at them.
 
+## Not paying for the same work twice
+
+Two costs dominate a release: three CUDA builds at roughly seventy minutes each,
+and two GPU certifications at about two dollars a run. Neither should be paid
+for a change that cannot affect the result.
+
+**Reusing wheels.** The CUDA wheels are upstream's, at pinned versions, built
+from unchanged Dockerfiles. A release that only changes this package's own code
+produces identical wheels, so nominate the run that already built them:
+
+```console
+$ gh workflow run release.yml -f tag=v0.1.1 -f wheel_run_id=32304273715
+```
+
+`build-cuda` is skipped, and both the certification and the release read their
+wheels from that run -- so the wheels attached are the wheels certified.
+
+**Producing evidence without releasing.** To certify a tag that is already
+published -- as v0.1.0 needed, having shipped without any CUDA report:
+
+```console
+$ gh workflow run release.yml -f tag=v0.1.0 \
+    -f wheel_run_id=32304273715 -f certify_only=true
+```
+
+It stops after the reports. Nothing is released, nothing is uploaded, and a
+final job runs the same gate the release runs and prints every measured error to
+the run summary -- so a tolerance can be sealed from evidence rather than from
+the brief's starting values. Without it the run would continue to the PyPI
+upload and fail there, because that version already exists.
+
+**Rehearsing the certification for nothing.** `ci-certify-rehearsal.yml` runs
+everything the pod does except the numerical comparison, on a free Linux runner,
+installing the wheels from the published release. Three certification runs have
+been paid for and thrown away by faults that had nothing to do with CUDA --
+wheels merged into one directory, a fixture venv without torch, an upstream
+package that would not import. Every one of them would have surfaced there, for
+nothing, in ten minutes. It runs automatically on any pull request that touches
+the certification path.
+
 ## Re-publishing a tag that was already certified
 
 If a release fails *after* certification -- as one did, on the PyPI upload --

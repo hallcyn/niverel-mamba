@@ -20,9 +20,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -30,9 +32,9 @@ from ..capabilities import UPSTREAM_RUNTIME_REQUIREMENTS, detect_environment
 from ..errors import AssetVerificationError
 from ..version import __version__
 
-__all__ = ["BINARY_MANIFEST_SCHEMA", "add_parser", "run", "verify_sha256"]
+__all__ = ["CUDA_INDEX_SCHEMA", "add_parser", "run", "verify_sha256"]
 
-BINARY_MANIFEST_SCHEMA = "niverel-mamba-binary-manifest-v1"
+CUDA_INDEX_SCHEMA = "niverel-mamba-cuda-index-v1"
 
 DEFAULT_MANIFEST_URL = (
     "https://github.com/hallcyn/niverel-mamba/releases/download/v{version}/cuda-manifest.json"
@@ -92,19 +94,24 @@ def _environment_key(env: Any) -> dict[str, Any]:
     }
 
 
-def _match(manifest: dict[str, Any], key: dict[str, Any]) -> list[dict[str, Any]]:
-    matches = []
-    for artifact in manifest.get("artifacts", []):
-        if artifact.get("python_tag") != key["python_tag"]:
+def _match(index: dict[str, Any], key: dict[str, Any]) -> dict[str, Any] | None:
+    """Pick the runtime built for this interpreter, torch build and GPU.
+
+    One runtime, not a list of wheels. The wheels of all three runtimes share
+    filenames, so they ship as one archive each; the archive is the unit that
+    can be named, fetched and verified.
+    """
+    for runtime in index.get("runtimes", []):
+        if runtime.get("python_tag") != key["python_tag"]:
             continue
-        if artifact.get("torch_version") != key["torch_version"]:
+        if runtime.get("torch_version") != key["torch_version"]:
             continue
-        if artifact.get("torch_cuda") != key["torch_cuda"]:
+        if runtime.get("torch_cuda") != key["torch_cuda"]:
             continue
-        if key["architecture"] and key["architecture"] not in artifact.get("architectures", []):
+        if key["architecture"] and key["architecture"] not in runtime.get("architectures", []):
             continue
-        matches.append(artifact)
-    return matches
+        return runtime
+    return None
 
 
 def run(args: argparse.Namespace) -> int:
@@ -130,27 +137,42 @@ def run(args: argparse.Namespace) -> int:
         print(f"Could not read the build manifest at {location}:\n  {exc}")
         return 1
 
-    if manifest.get("schema_version") != BINARY_MANIFEST_SCHEMA:
+    if manifest.get("schema_version") != CUDA_INDEX_SCHEMA:
         print(
             f"Unknown manifest schema {manifest.get('schema_version')!r}; "
-            f"this build understands {BINARY_MANIFEST_SCHEMA!r}."
+            f"this build understands {CUDA_INDEX_SCHEMA!r}."
         )
         return 1
 
-    matches = _match(manifest, key)
-    if not matches:
+    runtime = _match(manifest, key)
+    if runtime is None:
         print("No certified prebuilt wheel matches this environment.")
+        print()
+        print("Available runtimes in this release:")
+        for candidate in manifest.get("runtimes", []):
+            print(f"  torch {candidate['torch_version']} / CUDA {candidate['torch_cuda']}"
+                  f" / {candidate['python_tag']} / {', '.join(candidate.get('architectures', []))}")
         print()
         print("This command will not compile mamba-ssm on your machine. Either install a")
         print("supported Torch/CUDA combination, or build the wheels yourself with")
         print("scripts/build_upstream_cuda_wheels.py in a CUDA development container.")
         return 1
 
-    print("Required artifacts:")
-    for artifact in matches:
-        print(f"  {artifact['package']} {artifact['package_version']}  {artifact['filename']}")
-        print(f"    sha256 {artifact['sha256']}")
-        print(f"    built from {artifact.get('source_repository')} @ {artifact.get('source_commit')}")
+    archive = runtime["archive"]
+    print(f"Matching runtime: {runtime['name']}")
+    print(f"  torch {runtime['torch_version']} / CUDA {runtime['torch_cuda']}"
+          f" / {runtime['python_tag']} / {', '.join(runtime.get('architectures', []))}")
+    print(f"  built from {runtime.get('source_repository')} @ {runtime.get('source_commit')}")
+    print()
+    print(f"Will download {archive['filename']} ({archive['size_bytes'] / 1e6:.0f} MB)")
+    print(f"  sha256 {archive['sha256']}")
+    print("containing:")
+    for wheel in runtime["wheels"]:
+        print(f"  {wheel['package']} {wheel['package_version']}  {wheel['filename']}")
+        print(f"    sha256 {wheel['sha256']}")
+    print()
+    print(f"and then {', '.join(UPSTREAM_RUNTIME_REQUIREMENTS)}, which upstream imports at")
+    print("start-up and its own wheel does not install.")
     print()
 
     if not args.yes:
@@ -161,14 +183,29 @@ def run(args: argparse.Namespace) -> int:
     dest = args.dest or Path.home() / ".cache" / "niverel-mamba" / "wheels"
     dest.mkdir(parents=True, exist_ok=True)
 
+    bundle = dest / archive["filename"]
+    if not bundle.is_file():
+        print(f"downloading {archive['filename']} ...")
+        bundle.write_bytes(_fetch(archive["url"]))
+    verify_sha256(bundle, archive["sha256"])
+    print(f"verified    {archive['filename']}")
+
+    unpacked = dest / runtime["name"]
+    if unpacked.exists():
+        shutil.rmtree(unpacked)
+    with zipfile.ZipFile(bundle) as bundle_zip:
+        bundle_zip.extractall(unpacked)
+
+    # Every wheel is checked again after unpacking: the archive hash proves what
+    # was downloaded, not what comes out of it.
     downloaded = []
-    for artifact in matches:
-        target = dest / artifact["filename"]
+    for wheel in runtime["wheels"]:
+        target = unpacked / wheel["filename"]
         if not target.is_file():
-            print(f"downloading {artifact['filename']} ...")
-            target.write_bytes(_fetch(artifact["url"]))
-        verify_sha256(target, artifact["sha256"])
-        print(f"verified    {artifact['filename']}")
+            print(f"{wheel['filename']} is described but missing from the archive")
+            return 1
+        verify_sha256(target, wheel["sha256"])
+        print(f"verified    {wheel['filename']}")
         downloaded.append(target)
 
     print()

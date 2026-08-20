@@ -1,0 +1,158 @@
+name: ci-certify-rehearsal
+
+# Everything the certification pod does, except the part that needs a GPU, on a
+# free Linux runner.
+#
+# Three certification runs have now been paid for and thrown away by faults that
+# had nothing to do with CUDA: wheels merged into one directory, a fixture venv
+# without torch, and an upstream package that would not import because
+# `--no-deps` left `transformers` out. Every one of those would have shown up
+# here, for nothing, in ten minutes.
+#
+# It installs the wheels from the published release rather than building them,
+# so it costs no build either. What it cannot rehearse is the numerical
+# comparison itself -- that genuinely needs an A100 or an H100.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/certify-cuda.yml"
+      - ".github/workflows/ci-certify-rehearsal.yml"
+      - "src/niverel_mamba/cli/verify.py"
+      - "src/niverel_mamba/cli/install_backend.py"
+      - "src/niverel_mamba/backends/**"
+      - "src/niverel_mamba/capabilities.py"
+      - "src/niverel_mamba/registry.py"
+      - "scripts/verify_certification_reports.py"
+      - "scripts/make_golden_fixture.py"
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "release tag whose CUDA archive to rehearse with"
+        required: false
+        default: ""
+      target:
+        description: "which runtime archive"
+        required: false
+        default: torch211-cu128
+        type: choice
+        options: [torch211-cu128, torch212-cu130, torch213-cu130]
+
+permissions:
+  contents: read
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TARGET: ${{ inputs.target || 'torch211-cu128' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android && df -h /
+
+      - name: fetch the published CUDA wheels for that runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.release }}"
+          [ -n "$tag" ] || tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          echo "rehearsing with $tag / $TARGET"
+          gh release download "$tag" --dir . --pattern "niverel-mamba-cuda-$TARGET.zip"
+          mkdir -p wheelhouse && unzip -q "niverel-mamba-cuda-$TARGET.zip" -d wheelhouse
+          ls -l wheelhouse
+
+      - name: verify every SHA-256, exactly as the pod does
+        run: python3 scripts/verify_release_assets.py --wheelhouse wheelhouse
+
+      - name: build fixtures, including the real Foundation V3 block
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python3 -m venv .venv-fixtures
+          .venv-fixtures/bin/pip install --quiet "torch>=2.11,<2.14" \
+            --index-url https://download.pytorch.org/whl/cpu
+          .venv-fixtures/bin/pip install --quiet -e ".[torch,dev]"
+          .venv-fixtures/bin/python scripts/make_golden_fixture.py
+          if [ -n "$HF_TOKEN" ]; then
+            .venv-fixtures/bin/python scripts/make_golden_fixture.py --only-niverel
+          fi
+
+      - name: install the runtime exactly as the pod does
+        run: |
+          set -euo pipefail
+          read -r tv tc < <(python3 -c "
+          import json
+          a = json.load(open('wheelhouse/manifest.json'))['artifacts'][0]
+          print(a['torch_version'], a['torch_cuda'])")
+          echo "torch $tv, CUDA $tc"
+          python3 -m venv .venv-run
+          .venv-run/bin/pip install --quiet --upgrade pip
+          .venv-run/bin/pip install --quiet "torch==$tv" \
+            --index-url "https://download.pytorch.org/whl/cu${tc//./}"
+          .venv-run/bin/pip install --quiet --no-deps --only-binary :all: wheelhouse/*.whl
+          .venv-run/bin/pip install --quiet -e ".[dev]" einops transformers
+
+      - name: upstream Mamba2 must import in a fresh process
+        # The failure that cost a GPU run: the wheels install, their metadata is
+        # intact, and the package does not import because --no-deps left
+        # transformers out. No CUDA device is needed to catch it.
+        run: |
+          .venv-run/bin/python -c "
+          from mamba_ssm.modules.mamba2 import Mamba2
+          print('upstream Mamba2 imports:', Mamba2.__module__)"
+
+      - name: doctor must be honest about a machine with no GPU
+        run: |
+          set +e
+          out=$(.venv-run/bin/niverel-mamba doctor); code=$?
+          set -e
+          echo "$out"
+          echo "$out" | grep -q 'cuda-reference *no' \
+            || { echo "::error::doctor claims cuda-reference on a machine with no GPU"; exit 1; }
+
+      - name: the test suites the pod runs must at least collect and pass
+        run: .venv-run/bin/python -m pytest tests/cuda tests/niverel -q
+
+      - name: the torch-reference campaign must produce a report
+        # Named as the pod names it, so the release gate below sees a realistic
+        # set and refuses it for the right reason rather than for being empty.
+        run: |
+          .venv-run/bin/niverel-mamba verify --fixture segmented \
+            --report reports/certification-sm80-rehearsal-torch-reference.json
+          python3 -c "
+          import json
+          d = json.load(open('reports/certification-sm80-rehearsal-torch-reference.json'))
+          assert d['candidate_backend'] == 'torch-reference-cpu-chunked', d['candidate_backend']
+          assert d['passed']
+          print('torch-reference report OK')"
+
+      - name: the cuda campaign must refuse here, and write nothing
+        # It is the one thing this runner cannot rehearse, so what is rehearsed
+        # is that it refuses rather than emitting a report no GPU produced.
+        run: |
+          set +e
+          .venv-run/bin/niverel-mamba verify --fixture segmented \
+            --certify cuda-reference --report reports/cuda-reference.json
+          code=$?
+          set -e
+          [ $code -eq 1 ] || { echo "::error::expected exit 1, got $code"; exit 1; }
+          [ ! -f reports/cuda-reference.json ] \
+            || { echo "::error::wrote a CUDA report with no CUDA device"; exit 1; }
+          echo "refused, as it must"
+
+      - name: the release gate must refuse a set with no CUDA report
+        run: |
+          set +e
+          out=$(python3 scripts/verify_certification_reports.py --dir reports \
+            --require-arch sm80,sm90 --require-backend cuda-reference)
+          code=$?
+          set -e
+          echo "$out"
+          [ $code -eq 1 ] || { echo "::error::the gate accepted an uncertified set"; exit 1; }
+          echo "$out" | grep -q "nothing certifies \['cuda-reference'\]" \
+            || { echo "::error::the gate refused, but not for the reason it should have"; exit 1; }
+          echo "gate refused an uncertified set, as it must"
