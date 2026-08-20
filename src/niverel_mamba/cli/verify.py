@@ -172,17 +172,28 @@ def run(args: argparse.Namespace) -> int:
 def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) -> int:
     """Certify the upstream CUDA kernels against the portable backend.
 
-    Kept separate, and emitting its own report, because a report certifies
-    exactly one backend. The default campaign compares the portable chunked
-    implementation against its own float64 oracle; that is a real gate, but it
-    is a statement about `torch-reference` and stays labelled as one even when
-    it happens to run on a GPU.
+    **The gate is float32.** In float32 a disagreement between two chunked
+    implementations is algebraic -- reassociation, chunk boundaries, how a
+    segment reset is applied -- and a tight band means something. Anything
+    genuinely wrong, a mishandled reset above all, shows up as an O(1)
+    difference and cannot hide under a tolerance.
 
-    v0.1.0 shipped six reports produced on an A100 and an H100 whose
-    `candidate_backend` was `torch-reference-cpu-chunked`. They were read as
-    CUDA certification because of where they ran and what they were called.
-    They were not, and `cuda-reference` was published `experimental` -- which
-    was the honest status, and remains it until this campaign has run.
+    **bfloat16 is measured and reported, never gated**, because gating it
+    measures the number format rather than the kernels. Two runs on an A100
+    established that. Against an unrounded float32 reference the deviation was
+    max_abs 3.03e-02, of which the portable implementation alone -- no CUDA at
+    all -- already accounted for 3.01e-02. Feeding both sides the same bfloat16
+    data removed the input rounding and brought it to 1.85e-02 for `forward`,
+    but left 2.58e-02 on `segment_reset`: mean_abs 2.88e-03 on outputs of RMS
+    one, which is 0.29% against bfloat16's own 0.39% of relative precision. The
+    residue is the arithmetic inside the kernel, and no correct implementation
+    can be certified out of it.
+
+    So the report carries both: a verdict on the algorithm, and a measurement of
+    what bfloat16 costs on this fixture for anyone choosing to run it.
+
+    Kept separate from the default campaign, and emitting its own report,
+    because a report certifies exactly one backend.
     """
     import torch
 
@@ -201,32 +212,7 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
     inputs = fixture.torch_inputs(dtype=torch.float32)
     seq_idx = inputs.get("seq_idx")
     seq_idx = seq_idx.cuda() if seq_idx is not None else None
-
-    # Both sides get *the same data*. The reference holds bfloat16-representable
-    # values in float32 storage and computes accurately; the candidate holds
-    # true bfloat16 and runs upstream's kernels. What is left is what the
-    # kernels do differently -- which is the question a certification asks.
-    #
-    # Comparing bfloat16 output against an unrounded float32 reference measures
-    # something else entirely: the loss of bfloat16 itself. That is not a
-    # property of the CUDA backend, and it cannot be certified away. Measured on
-    # this same fixture with the portable implementation alone -- no CUDA, no
-    # upstream kernels, merely rounding inputs and weights to bfloat16 -- the
-    # deviation is already max_abs 3.01e-02 with five elements outside a
-    # 2e-02 band. The A100 running upstream's kernels gave 3.03e-02 and eleven.
-    # The band was never reachable by any correct bfloat16 implementation.
-    rounded = {k: v.float().bfloat16().float().cuda() for k, v in weights.items()}
-    x_bf16 = inputs["x"].bfloat16().cuda()
-    x_equal = x_bf16.float()
-
-    portable = Mamba2(config).cuda().float()
-    portable.load_state_dict(rounded, strict=True)
-    portable.eval()
-
-    candidate = CudaReferenceBackend(config, device="cuda", dtype=torch.bfloat16)
-    # The same weights, through the canonical contract -- which is the claim
-    # being certified: one checkpoint, either backend.
-    candidate.load_canonical_weights(portable.state_dict())
+    x = inputs["x"].cuda()
 
     capability = torch.cuda.get_device_capability(0)
     report = CertificationReport(
@@ -235,51 +221,100 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
         fixture=args.fixture,
         metadata={
             "torch": env.torch.version,
-            "dtype": "torch.bfloat16",
+            "gated_dtype": "torch.float32",
             "device": torch.cuda.get_device_name(0),
             "compute_capability": f"sm_{capability[0]}{capability[1]}",
             "real_checkpoint": fixture.is_real_checkpoint,
         },
     )
 
-    with torch.no_grad():
-        expected = portable(x_equal)
-        actual = candidate.forward(x_bf16)
-        report.add(
-            compare(actual.float(), expected, name="forward", tolerance="cuda_bfloat16")
-        )
+    exact = Mamba2(config).cuda().float()
+    exact.load_state_dict({k: v.float().cuda() for k, v in weights.items()}, strict=True)
+    exact.eval()
 
-        if seq_idx is not None:
-            expected_segmented = portable(x_equal, seq_idx=seq_idx)
-            actual_segmented = candidate.forward(x_bf16, seq_idx=seq_idx)
+    # ---- the gate: float32, where a difference is the algorithm's ------------
+    try:
+        candidate32 = CudaReferenceBackend(config, device="cuda", dtype=torch.float32)
+        candidate32.load_canonical_weights(exact.state_dict())
+        with torch.no_grad():
             report.add(
                 compare(
-                    actual_segmented.float(),
-                    expected_segmented,
-                    name="segment_reset",
-                    tolerance="cuda_bfloat16",
+                    candidate32.forward(x).float(),
+                    exact(x),
+                    name="forward_float32",
+                    tolerance="cuda_float32",
                 )
             )
+            if seq_idx is not None:
+                report.add(
+                    compare(
+                        candidate32.forward(x, seq_idx=seq_idx).float(),
+                        exact(x, seq_idx=seq_idx),
+                        name="segment_reset_float32",
+                        tolerance="cuda_float32",
+                    )
+                )
+    except Exception as exc:  # the gate must fail loudly, never quietly vanish
+        print(f"::error::the float32 campaign could not run: {type(exc).__name__}: {exc}")
+        report.metadata["float32_error"] = f"{type(exc).__name__}: {exc}"
+        if args.report:
+            print(f"\nwrote {report.write(args.report)}")
+        return 1
 
-        # Reported, never gated: how much precision bfloat16 costs on this
-        # fixture, whatever runs it. A user choosing bfloat16 is choosing this,
-        # and it belongs in the report as information rather than as a verdict.
-        exact = Mamba2(config).cuda().float()
-        exact.load_state_dict({k: v.float().cuda() for k, v in weights.items()}, strict=True)
-        exact.eval()
-        y_exact = exact(inputs["x"].cuda())
-        floor = (actual.float() - y_exact).abs()
-        report.metadata["bfloat16_data_floor"] = {
-            "note": (
-                "deviation of the bfloat16 candidate from an unrounded float32 "
-                "reference. Dominated by bfloat16 itself, not by the kernels; "
-                "not a pass criterion."
-            ),
-            "max_abs_error": float(floor.max()),
-            "mean_abs_error": float(floor.mean()),
-        }
+    # ---- measured, never gated: what bfloat16 costs --------------------------
+    rounded = {k: v.float().bfloat16().float().cuda() for k, v in weights.items()}
+    x_bf16 = inputs["x"].bfloat16().cuda()
+    x_equal = x_bf16.float()
+
+    lossless = Mamba2(config).cuda().float()
+    lossless.load_state_dict(rounded, strict=True)
+    lossless.eval()
+    candidate16 = CudaReferenceBackend(config, device="cuda", dtype=torch.bfloat16)
+    candidate16.load_canonical_weights(lossless.state_dict())
+
+    measured: dict[str, Any] = {
+        "note": (
+            "bfloat16 is reported, not gated. Against an unrounded float32 "
+            "reference this measures the number format rather than the kernels: "
+            "the portable implementation alone, with no CUDA involved, already "
+            "deviates by 3.01e-02 on the segmented fixture."
+        )
+    }
+    with torch.no_grad():
+        for name, ids in (("forward", None), ("segment_reset", seq_idx)):
+            if name == "segment_reset" and seq_idx is None:
+                continue
+            actual = candidate16.forward(x_bf16, seq_idx=ids).float()
+            at_equal_data = (actual - lossless(x_equal, seq_idx=ids)).abs()
+            against_exact = (actual - exact(x, seq_idx=ids)).abs()
+            measured[name] = {
+                "at_equal_data": {
+                    "max_abs_error": float(at_equal_data.max()),
+                    "mean_abs_error": float(at_equal_data.mean()),
+                },
+                "against_unrounded_float32": {
+                    "max_abs_error": float(against_exact.max()),
+                    "mean_abs_error": float(against_exact.mean()),
+                },
+            }
+    report.metadata["bfloat16_measured"] = measured
 
     print(report.summary())
+    print("\nbfloat16, measured and not gated:")
+    for name, values in measured.items():
+        if name == "note":
+            continue
+        equal = values["at_equal_data"]
+        exact_cmp = values["against_unrounded_float32"]
+        print(
+            f"  {name:14s} equal data  max_abs={equal['max_abs_error']:.3e}"
+            f"  mean_abs={equal['mean_abs_error']:.3e}"
+        )
+        print(
+            f"  {'':14s} vs float32  max_abs={exact_cmp['max_abs_error']:.3e}"
+            f"  mean_abs={exact_cmp['mean_abs_error']:.3e}"
+        )
+
     if args.report:
         print(f"\nwrote {report.write(args.report)}")
     return 0 if report.passed else 1
