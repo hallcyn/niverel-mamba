@@ -27,6 +27,14 @@ on:
       tag:
         description: "existing tag to release, e.g. v0.1.0"
         required: true
+      wheel_run_id:
+        description: >
+          reuse the CUDA wheels built by this run id instead of rebuilding them.
+          The wheels are upstream's, at pinned versions, from unchanged
+          Dockerfiles -- a rebuild produces the same artefact and costs seventy
+          minutes per runtime.
+        required: false
+        default: ""
       publish_only:
         description: >
           publish a tag that was already built and certified, without rebuilding
@@ -60,7 +68,7 @@ jobs:
 
   build-cuda:
     needs: build-core
-    if: ${{ !cancelled() && !inputs.publish_only && needs.build-core.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.publish_only && !inputs.wheel_run_id && needs.build-core.result == 'success' }}
     uses: ./.github/workflows/build-cuda-wheels.yml
     permissions:
       contents: read
@@ -73,13 +81,14 @@ jobs:
 
   certify-sm80:
     needs: build-cuda
-    if: ${{ !cancelled() && !inputs.publish_only && needs.build-cuda.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.publish_only && needs.build-cuda.result != 'failure' && needs.build-cuda.result != 'cancelled' }}
     uses: ./.github/workflows/certify-cuda.yml
     permissions:
       contents: read
       actions: read
     with:
       arch: sm80
+      wheel_run_id: ${{ inputs.wheel_run_id }}
     secrets: inherit
 
   certify-sm90:
@@ -87,13 +96,14 @@ jobs:
     # for no gain, and if sm80 already found a regression there is nothing to
     # learn from paying for an H100 to find the same one.
     needs: certify-sm80
-    if: ${{ !cancelled() && !inputs.publish_only && needs.certify-sm80.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.publish_only && needs.certify-sm80.result != 'failure' && needs.certify-sm80.result != 'cancelled' }}
     uses: ./.github/workflows/certify-cuda.yml
     permissions:
       contents: read
       actions: read
     with:
       arch: sm90
+      wheel_run_id: ${{ inputs.wheel_run_id }}
     secrets: inherit
 
   github-release:
@@ -102,6 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read          # to read artifacts from a nominated wheel run
     steps:
       - uses: actions/checkout@v7
         with:
@@ -119,6 +130,10 @@ jobs:
       - name: fetch the certified CUDA wheels
         uses: actions/download-artifact@v8
         with:
+          # From the run that built them when one is nominated, so a release
+          # that reuses wheels attaches the very wheels that were certified.
+          run-id: ${{ inputs.wheel_run_id || github.run_id }}
+          github-token: ${{ github.token }}
           pattern: cuda-wheels-*
           path: cuda-wheels
           # NOT merged: every target ships a manifest.json and wheels with
@@ -153,6 +168,19 @@ jobs:
             cp "$dir/manifest.json" "assets/manifest-$target.json"
           done
           ls -l assets
+
+      - name: build the index install-backend downloads
+        # The per-runtime build manifests carry `"url": null` -- at build time
+        # nothing knows where the artefact will be published. This runs when the
+        # answer is known and writes one index naming each archive, its URL and
+        # its SHA-256, plus the SHA-256 of every wheel inside it.
+        run: |
+          python scripts/build_release_manifest.py \
+            --wheelhouse cuda-wheels --assets assets \
+            --tag "${{ inputs.tag || github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --output assets/cuda-manifest.json
+          cat assets/cuda-manifest.json
 
       - name: list exactly what will be attached
         run: |

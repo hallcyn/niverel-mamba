@@ -596,3 +596,44 @@ def test_the_release_checks_what_the_reports_certify():
                 assert "--require-backend" in run and "cuda-reference" in run, (
                     f"{name}:{job_id} does not require the CUDA backend to be certified"
                 )
+
+
+def test_the_release_publishes_the_index_install_backend_needs():
+    """`install-backend` cannot work from the per-runtime build manifests.
+
+    They carry `"url": null` -- at build time nothing knows where the artefact
+    will be published -- so the release has to write an index that does know,
+    and attach it.
+    """
+    steps = _workflows()["release.yml"]["jobs"]["github-release"]["steps"]
+    script = "".join(str(step.get("run", "")) for step in steps)
+    assert "build_release_manifest.py" in script, "the release must build the CUDA index"
+
+    release_step = next(s for s in steps if "gh-release" in str(s.get("uses", "")))
+    files = str(release_step["with"]["files"])
+    assert "assets/*" in files, "the index is written into assets/, which must be attached"
+
+
+def test_a_release_can_reuse_wheels_it_did_not_build():
+    """Seventy minutes per runtime, for an artefact that cannot differ.
+
+    The wheels are upstream's, at pinned versions, from unchanged Dockerfiles.
+    Rebuilding them for a release that only changes this package's own code is
+    pure cost, so `wheel_run_id` nominates an existing build -- and the
+    certification and the release must both read from that run, or the release
+    would attach wheels other than the ones certified.
+    """
+    jobs = _workflows()["release.yml"]["jobs"]
+    assert "wheel_run_id" in str(jobs["build-cuda"].get("if")), (
+        "build-cuda must be skipped when wheels are nominated"
+    )
+    for job_id in ("certify-sm80", "certify-sm90"):
+        assert "inputs.wheel_run_id" in str(jobs[job_id]["with"].get("wheel_run_id")), job_id
+
+    download = next(
+        s for s in jobs["github-release"]["steps"]
+        if str((s.get("with") or {}).get("pattern", "")).startswith("cuda-wheels")
+    )
+    assert "inputs.wheel_run_id" in str(download["with"]["run-id"]), (
+        "the release must attach the wheels from the run that was certified"
+    )
