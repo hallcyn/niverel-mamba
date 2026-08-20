@@ -108,3 +108,20 @@ def test_cuda_certified_on_sm80_only_is_refused(tmp_path):
     result = _run(tmp_path, reports)
     assert result.returncode != 0
     assert "sm90" in result.stdout
+
+
+def test_a_measurement_report_never_counts_as_certification(tmp_path):
+    """Measuring is not certifying, and the gate must not confuse the two.
+
+    A measurement run exists to observe tolerance classes so they can be sealed
+    from evidence. Its reports carry real numbers and no verdict, and the
+    release gate has to keep refusing them however green the run that produced
+    them looked.
+    """
+    reports = _full_set()
+    for name in list(reports):
+        if "cuda-reference" in name:
+            reports[name] = {**_report("cuda-reference", passed=False), "mode": "measurement"}
+    result = _run(tmp_path, reports)
+    assert result.returncode != 0
+    assert "did not pass" in result.stdout

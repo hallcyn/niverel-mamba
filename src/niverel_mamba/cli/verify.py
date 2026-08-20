@@ -47,6 +47,16 @@ def add_parser(subparsers: Any) -> Any:
             "CUDA kernels, however expensive the machine that produced it was."
         ),
     )
+    parser.add_argument(
+        "--measure",
+        action="store_true",
+        help=(
+            "measure and report without passing judgement. The report is marked as a "
+            "measurement and the command succeeds whatever the numbers, so that a run "
+            "on rented hardware yields evidence instead of stopping at the first "
+            "comparison scored against a tolerance nobody has observed yet."
+        ),
+    )
     parser.set_defaults(func=run)
     return parser
 
@@ -259,7 +269,7 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
         report.metadata["float32_error"] = f"{type(exc).__name__}: {exc}"
         if args.report:
             print(f"\nwrote {report.write(args.report)}")
-        return 1
+        return 0 if args.measure else 1
 
     # ---- measured, never gated: what bfloat16 costs --------------------------
     rounded = {k: v.float().bfloat16().float().cuda() for k, v in weights.items()}
@@ -299,6 +309,14 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
             }
     report.metadata["bfloat16_measured"] = measured
 
+    if args.measure:
+        report.metadata["mode"] = "measurement"
+        report.metadata["note"] = (
+            "MEASUREMENT ONLY. This report certifies nothing: it exists to observe "
+            "the tolerance classes so they can be sealed from evidence. The release "
+            "gate rejects it, which is correct."
+        )
+
     print(report.summary())
     print("\nbfloat16, measured and not gated:")
     for name, values in measured.items():
@@ -317,6 +335,9 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
 
     if args.report:
         print(f"\nwrote {report.write(args.report)}")
+    if args.measure:
+        print("\nmeasurement only: no verdict was passed, and none is implied")
+        return 0
     return 0 if report.passed else 1
 
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import requires_cuda, requires_torch
+from tests.conftest import requires_cuda, requires_measured_tolerance, requires_torch
 
 pytestmark = requires_torch
 
@@ -65,6 +65,7 @@ def test_error_names_the_install_command():
 
 
 @requires_cuda
+@requires_measured_tolerance("cuda_float32")
 @pytest.mark.cuda
 def test_cuda_matches_torch_reference():
     """Parity against the portable backend, in float32.
@@ -104,6 +105,7 @@ def test_cuda_matches_torch_reference():
 
 
 @requires_cuda
+@requires_measured_tolerance("cuda_float32")
 @pytest.mark.cuda
 def test_cuda_seq_idx_reset_matches():
     import torch

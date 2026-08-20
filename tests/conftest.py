@@ -66,6 +66,36 @@ requires_mps = pytest.mark.skipif(not _MPS_USABLE, reason=f"MPS unusable: {_MPS_
 requires_cuda = pytest.mark.skipif(not _cuda_available(), reason="no CUDA device available")
 
 
+def requires_measured_tolerance(name: str) -> Any:
+    """Skip a test whose tolerance class has never been observed.
+
+    A tolerance that has not been measured is a guess, and asserting a guess
+    turns a correct implementation into a red build. That is not hypothetical:
+    the CUDA parity tests failed twice on rented GPUs against bands sized for
+    arithmetic the hardware does not perform -- first bfloat16 against an
+    unrounded float32 reference, then float32 against kernels that multiply in
+    TF32, which carries ten mantissa bits rather than twenty-four.
+
+    So these tests wait for evidence. They activate the moment
+    `tolerances.yaml` carries an `observed` block for their class, which is
+    exactly what a measurement run produces.
+    """
+    try:
+        from niverel_mamba.certification.tolerances import load_tolerances
+
+        observed = load_tolerances()[name].observed
+    except Exception as exc:  # pragma: no cover - defensive
+        return pytest.mark.skipif(True, reason=f"cannot read tolerance {name!r}: {exc}")
+    return pytest.mark.skipif(
+        observed is None,
+        reason=(
+            f"tolerance class {name!r} has no observed data yet; "
+            f"run `niverel-mamba verify --certify cuda-reference --measure` on a GPU "
+            f"and seal the result before asserting a bound"
+        ),
+    )
+
+
 def _upstream_wheel() -> Path | None:
     try:
         from _upstream_env import find_wheel

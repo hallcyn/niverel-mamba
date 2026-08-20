@@ -27,6 +27,15 @@ on:
         description: "sm80 or sm90"
         required: true
         type: string
+      measure_only:
+        description: >
+          observe the tolerance classes without passing judgement. The CUDA
+          campaign reports its numbers and succeeds whatever they are, so a run
+          on rented hardware yields evidence instead of stopping at the first
+          comparison scored against a band nobody has measured yet.
+        required: false
+        type: boolean
+        default: false
       wheel_run_id:
         description: "run holding the cuda-wheels artifacts; empty means this run"
         required: false
@@ -230,8 +239,11 @@ jobs:
             base="reports/certification-${{ inputs.arch }}-$target"
             "$venv/bin/niverel-mamba" verify --fixture segmented --device cuda \
               --report "$base-torch-reference.json"
+            measure=""
+            if [ "${{ inputs.measure_only }}" = "true" ]; then measure="--measure"; fi
+            # shellcheck disable=SC2086
             "$venv/bin/niverel-mamba" verify --fixture segmented --certify cuda-reference \
-              --report "$base-cuda-reference.json"
+              $measure --report "$base-cuda-reference.json"
             cat "$base-torch-reference.json" "$base-cuda-reference.json"
 
             rm -rf "$venv"
