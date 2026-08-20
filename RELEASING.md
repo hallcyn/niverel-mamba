@@ -80,6 +80,23 @@ There is no PyPI token anywhere in this repository and there should never be
 one. A token is a long-lived credential that can be exfiltrated; an OIDC
 exchange is scoped to one workflow run of one repository.
 
+## What a certification report is a claim about
+
+Each certification run writes **two** reports per runtime, because a report
+certifies exactly one backend:
+
+| report | candidate | reference |
+|---|---|---|
+| `...-torch-reference.json` | `torch-reference-cpu-chunked` | its own float64 sequential oracle |
+| `...-cuda-reference.json` | `cuda-reference` (upstream kernels, bfloat16) | `torch-reference` on the same GPU |
+
+v0.1.0 shipped only the first, on both architectures. Every one passed, and not
+one of them said anything about the CUDA kernels -- they were read as CUDA
+certification because of the hardware they ran on and the name of the file they
+landed in. `scripts/verify_certification_reports.py` now refuses a release whose
+reports do not certify `cuda-reference` on both sm80 and sm90, and it refuses
+v0.1.0's own reports when pointed at them.
+
 ## Re-publishing a tag that was already certified
 
 If a release fails *after* certification -- as one did, on the PyPI upload --

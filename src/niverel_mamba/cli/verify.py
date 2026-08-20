@@ -37,6 +37,16 @@ def add_parser(subparsers: Any) -> Any:
     parser.add_argument("--report", type=Path, default=None, help="write the JSON report here")
     parser.add_argument("--device", default=None, help="also compare against this torch device")
     parser.add_argument("--mlx", action="store_true", help="also compare the MLX backend")
+    parser.add_argument(
+        "--certify",
+        default="torch-reference",
+        choices=["torch-reference", "cuda-reference"],
+        help=(
+            "which backend the report certifies. One report, one certified backend: "
+            "a report whose candidate is torch-reference proves nothing about the "
+            "CUDA kernels, however expensive the machine that produced it was."
+        ),
+    )
     parser.set_defaults(func=run)
     return parser
 
@@ -64,6 +74,10 @@ def run(args: argparse.Namespace) -> int:
 
     env = detect_environment()
     config = fixture.config
+
+    if args.certify == "cuda-reference":
+        return _certify_cuda_reference(args, fixture, env)
+
     # The tiny and segmented fixtures are float64; the real V3 block is float32.
     double = not fixture.is_real_checkpoint
     dtype = torch.float64 if double else torch.float32
@@ -152,6 +166,88 @@ def run(args: argparse.Namespace) -> int:
     if args.report:
         path = report.write(args.report)
         print(f"\nwrote {path}")
+    return 0 if report.passed else 1
+
+
+def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) -> int:
+    """Certify the upstream CUDA kernels against the portable backend.
+
+    Kept separate, and emitting its own report, because a report certifies
+    exactly one backend. The default campaign compares the portable chunked
+    implementation against its own float64 oracle; that is a real gate, but it
+    is a statement about `torch-reference` and stays labelled as one even when
+    it happens to run on a GPU.
+
+    v0.1.0 shipped six reports produced on an A100 and an H100 whose
+    `candidate_backend` was `torch-reference-cpu-chunked`. They were read as
+    CUDA certification because of where they ran and what they were called.
+    They were not, and `cuda-reference` was published `experimental` -- which
+    was the honest status, and remains it until this campaign has run.
+    """
+    import torch
+
+    from ..certification.compare import compare
+    from ..certification.report import CertificationReport
+    from ..torch_ops.mamba2 import Mamba2
+
+    if not torch.cuda.is_available():
+        print("--certify cuda-reference needs a visible CUDA device; torch reports none")
+        return 1
+
+    from ..backends.cuda_reference import CudaReferenceBackend
+
+    config = fixture.config
+    weights = fixture.torch_weights(dtype=torch.float32)
+    inputs = fixture.torch_inputs(dtype=torch.float32)
+    x = inputs["x"].cuda()
+    seq_idx = inputs.get("seq_idx")
+    seq_idx = seq_idx.cuda() if seq_idx is not None else None
+
+    portable = Mamba2(config).cuda().float()
+    portable.load_state_dict({k: v.float().cuda() for k, v in weights.items()}, strict=True)
+    portable.eval()
+
+    candidate = CudaReferenceBackend(config, device="cuda", dtype=torch.bfloat16)
+    # The same weights, through the canonical contract -- which is the claim
+    # being certified: one checkpoint, either backend.
+    candidate.load_canonical_weights(portable.state_dict())
+
+    capability = torch.cuda.get_device_capability(0)
+    report = CertificationReport(
+        reference_backend="torch-reference-cuda-float32",
+        candidate_backend="cuda-reference",
+        fixture=args.fixture,
+        metadata={
+            "torch": env.torch.version,
+            "dtype": "torch.bfloat16",
+            "device": torch.cuda.get_device_name(0),
+            "compute_capability": f"sm_{capability[0]}{capability[1]}",
+            "real_checkpoint": fixture.is_real_checkpoint,
+        },
+    )
+
+    with torch.no_grad():
+        expected = portable(x)
+        actual = candidate.forward(x.to(torch.bfloat16))
+        report.add(
+            compare(actual.float(), expected, name="forward", tolerance="cuda_bfloat16")
+        )
+
+        if seq_idx is not None:
+            expected_segmented = portable(x, seq_idx=seq_idx)
+            actual_segmented = candidate.forward(x.to(torch.bfloat16), seq_idx=seq_idx)
+            report.add(
+                compare(
+                    actual_segmented.float(),
+                    expected_segmented,
+                    name="segment_reset",
+                    tolerance="cuda_bfloat16",
+                )
+            )
+
+    print(report.summary())
+    if args.report:
+        print(f"\nwrote {report.write(args.report)}")
     return 0 if report.passed else 1
 
 

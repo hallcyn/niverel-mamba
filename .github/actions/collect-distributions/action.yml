@@ -36,37 +36,20 @@ runs:
         gh release download "${{ inputs.tag }}" --dir certification \
           --pattern 'certification-*.json'
 
-    - name: the release must carry passing certification reports
+    - name: the release must carry reports that certify the CUDA backend
       # publish_only exists so that a failure *after* certification can be
       # retried without paying for the GPUs again. It must not become a way to
-      # publish something uncertified, so it checks the evidence attached to the
-      # release instead of trusting that a job once went green.
+      # publish something uncertified, so it re-reads the evidence attached to
+      # the release -- and checks what that evidence is a statement about, not
+      # only that it is green.
       if: inputs.publish_only == 'true'
       shell: bash
       run: |
-        python - <<'PY'
-        import json, pathlib, sys
-
-        reports = sorted(pathlib.Path("certification").glob("certification-*.json"))
-        if not reports:
-            sys.exit("::error::the release carries no certification report; refusing to publish")
-
-        architectures = set()
-        for path in reports:
-            data = json.loads(path.read_text())
-            status = "passed" if data.get("passed") else "FAILED"
-            print(f"{path.name}: {status} "
-                  f"({data['candidate_backend']} vs {data['reference_backend']}, "
-                  f"max_abs={data['max_abs_error']:.3e})")
-            if not data.get("passed"):
-                sys.exit(f"::error::{path.name} did not pass; refusing to publish")
-            architectures.add(path.name.split("-")[1])
-
-        missing = {"sm80", "sm90"} - architectures
-        if missing:
-            sys.exit(f"::error::no passing report for {sorted(missing)}; refusing to publish")
-        print(f"{len(reports)} passing reports covering {sorted(architectures)}")
-        PY
+        # $GITHUB_WORKSPACE, not a path relative to the action: the checkout
+        # that provides this action also provides the script.
+        python "$GITHUB_WORKSPACE/scripts/verify_certification_reports.py" \
+          --dir certification \
+          --require-arch sm80,sm90 --require-backend cuda-reference,torch-reference-cpu-chunked
 
     - name: refuse to publish nothing
       shell: bash
