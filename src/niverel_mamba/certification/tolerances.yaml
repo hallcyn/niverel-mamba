@@ -72,10 +72,20 @@ classes:
     rtol: 2.0e-2
     rel_floor: 1.0e-2
     description: >-
-      cuda-reference in bfloat16 against torch-reference float32.
-      NOT YET MEASURED -- no NVIDIA GPU was available when this file was
-      sealed. These are the brief's starting values, carried unchanged, and
-      the cuda-reference backend is published as `experimental` precisely
+      cuda-reference in bfloat16 against torch-reference given THE SAME
+      bfloat16 inputs and weights, held in float32 and computed accurately.
+      What is measured is what upstream's kernels do differently, not what
+      bfloat16 costs.
+      The distinction is not academic: compared against an *unrounded* float32
+      reference, merely rounding inputs and weights to bfloat16 already gives
+      max_abs 3.01e-02 on the segmented fixture, with five of 16448 elements
+      outside this band -- with no CUDA and no upstream kernels involved. An
+      A100 running the real kernels gave 3.03e-02 and eleven. No correct
+      bfloat16 implementation could ever have passed that comparison, so the
+      comparison was changed rather than the band.
+      STILL NOT MEASURED at equal data. These remain the brief's starting
+      values, carried unchanged, and the cuda-reference backend is published
+      as `experimental` precisely
       because this row is unverified. certify-cuda-sm80.yml must replace the
       `observed` block below before that status may change.
     observed: null
