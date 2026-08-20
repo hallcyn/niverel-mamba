@@ -97,6 +97,36 @@ landed in. `scripts/verify_certification_reports.py` now refuses a release whose
 reports do not certify `cuda-reference` on both sm80 and sm90, and it refuses
 v0.1.0's own reports when pointed at them.
 
+## Measure before you gate
+
+A tolerance that has never been observed is a guess, and scoring against a guess
+on rented hardware wastes the hardware. Three certification runs were lost that
+way, each to a band sized for arithmetic the machine does not perform:
+
+| run | band assumed | what the hardware actually does |
+|---|---|---|
+| 1 | bfloat16 close to float32 | bfloat16 carries 8 mantissa bits; rounding the *inputs* alone already left the band |
+| 2 | the same, at equal data | the kernels still accumulate in bfloat16 internally |
+| 3 | float32 close to float32 | upstream's 30 `tl.dot` calls pass no `allow_tf32`, so Ampere multiplies in TF32: 10 mantissa bits |
+
+So measurement comes first:
+
+```console
+$ gh workflow run release.yml -f tag=v0.1.0 -f wheel_run_id=32304273715 \
+    -f certify_only=true -f measure_only=true
+```
+
+The campaign reports every comparison and succeeds whatever the numbers, so one
+run yields evidence on both architectures. The reports are marked
+`mode: measurement`, carry no verdict, and the release gate keeps refusing them
+-- measuring is not certifying.
+
+Seal the observed values into `certification/tolerances.yaml`, and the CUDA
+parity tests stop skipping: `requires_measured_tolerance` keeps them dormant
+until their class has an `observed` block, so no test asserts a bound nobody has
+seen. Then run again without `measure_only` to certify against what was
+measured.
+
 ## Not paying for the same work twice
 
 Two costs dominate a release: three CUDA builds at roughly seventy minutes each,

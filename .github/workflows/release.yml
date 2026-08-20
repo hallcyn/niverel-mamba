@@ -35,6 +35,13 @@ on:
           minutes per runtime.
         required: false
         default: ""
+      measure_only:
+        description: >
+          with certify_only: observe the tolerance classes instead of scoring
+          against them. Produces evidence on both architectures in one run,
+          which is what a band should be sealed from.
+        type: boolean
+        default: false
       certify_only:
         description: >
           stop after the certification reports. Nothing is released and nothing
@@ -96,6 +103,7 @@ jobs:
     with:
       arch: sm80
       wheel_run_id: ${{ inputs.wheel_run_id }}
+      measure_only: ${{ inputs.measure_only == true }}
     secrets: inherit
 
   certify-sm90:
@@ -111,6 +119,7 @@ jobs:
     with:
       arch: sm90
       wheel_run_id: ${{ inputs.wheel_run_id }}
+      measure_only: ${{ inputs.measure_only == true }}
     secrets: inherit
 
   github-release:
@@ -240,6 +249,9 @@ jobs:
           merge-multiple: true
 
       - name: what was certified
+        # Not in measurement mode: there, by construction, nothing was certified
+        # and the reports say so. Running the gate would only restate that.
+        if: ${{ !inputs.measure_only }}
         run: |
           python scripts/verify_certification_reports.py --dir certification \
             --require-arch sm80,sm90 --require-backend cuda-reference,torch-reference-cpu-chunked

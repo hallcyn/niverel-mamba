@@ -696,3 +696,34 @@ def test_the_cuda_gate_is_float32_and_bfloat16_is_only_measured():
     assert 'report.metadata["bfloat16_measured"]' in source, (
         "bfloat16 must still be measured and reported, just not gated"
     )
+
+
+def test_measurement_mode_reaches_the_campaign():
+    """A measurement run must actually be told to measure.
+
+    Without the flag the campaign scores against bands nobody has observed and
+    stops at the first one, which is how two rented GPUs produced no usable
+    numbers at all.
+    """
+    steps = _workflows()["certify-cuda.yml"]["jobs"]["certify"]["steps"]
+    script = "".join(
+        line
+        for step in steps
+        for line in str(step.get("run", "")).splitlines(keepends=True)
+        if not line.strip().startswith("#")
+    )
+    assert "inputs.measure_only" in script, "certify-cuda must honour measure_only"
+
+    # Line continuations joined, so the check sees whole commands. A first
+    # version merely looked for "--measure" anywhere and was satisfied by the
+    # shell assignment that defines it, passing a workflow whose invocation had
+    # dropped the variable.
+    commands = script.replace("\\\n", " ").splitlines()
+    invocation = next(c for c in commands if "--certify cuda-reference" in c)
+    assert "$measure" in invocation, (
+        f"the campaign is invoked without the measurement flag: {invocation.strip()[:90]}"
+    )
+
+    jobs = _workflows()["release.yml"]["jobs"]
+    for job_id in ("certify-sm80", "certify-sm90"):
+        assert "inputs.measure_only" in str(jobs[job_id]["with"].get("measure_only")), job_id
