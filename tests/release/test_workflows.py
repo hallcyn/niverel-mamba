@@ -395,6 +395,10 @@ def test_merged_artifacts_carry_the_architecture_in_every_filename():
     )
 
     written = "".join(str(s.get("run", "")) for s in steps)
+    # The loop builds those paths from a shell variable, so expand it: the check
+    # must see the paths that are actually written, not the variable name.
+    for name, value in re.findall(r'^\s*(\w+)="(reports/[^"\n]+)"\s*$', written, re.M):
+        written = written.replace(f'"${name}', f'"{value}')
     # Split on whitespace would tear `${{ inputs.arch }}` in half.
     reports = set(re.findall(r"""reports/certification[^\n"']*?\.json""", written))
     assert reports, "no certification report path found in certify-cuda.yml"
@@ -551,3 +555,44 @@ def test_jobs_using_a_local_action_do_not_check_out_an_older_ref():
                         f"which may predate that action"
                     )
     assert not problems, "\n".join(problems)
+
+
+def test_certification_actually_certifies_the_cuda_backend():
+    """Running on a GPU is not the same as certifying the GPU backend.
+
+    v0.1.0's six reports were produced on an A100 and an H100 and every one
+    passed, while none of them measured the CUDA kernels: `verify` was invoked
+    without `--certify`, so the campaign compared the portable chunked
+    implementation against its own float64 oracle and labelled the report
+    accordingly. Nothing about the hardware makes that a CUDA result.
+    """
+    steps = _workflows()["certify-cuda.yml"]["jobs"]["certify"]["steps"]
+    script = "".join(
+        line
+        for step in steps
+        for line in str(step.get("run", "")).splitlines(keepends=True)
+        if not line.strip().startswith("#")
+    )
+    assert "--certify cuda-reference" in script, (
+        "certification must run a campaign whose candidate_backend is cuda-reference"
+    )
+
+
+def test_the_release_checks_what_the_reports_certify():
+    """`passed: true` is not the question; `candidate_backend` is."""
+    checks = []
+    for name, workflow in _workflows().items():
+        for job_id, job in workflow["jobs"].items():
+            for step in job.get("steps") or []:
+                if "verify_certification_reports.py" in str(step.get("run", "")):
+                    checks.append(f"{name}:{job_id}")
+    assert checks, "no job verifies the certification reports"
+    for name, workflow in _workflows().items():
+        for job_id, job in workflow["jobs"].items():
+            for step in job.get("steps") or []:
+                run = str(step.get("run", ""))
+                if "verify_certification_reports.py" not in run:
+                    continue
+                assert "--require-backend" in run and "cuda-reference" in run, (
+                    f"{name}:{job_id} does not require the CUDA backend to be certified"
+                )

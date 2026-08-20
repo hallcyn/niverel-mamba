@@ -85,3 +85,25 @@ def test_the_cuda_backend_is_not_advertised_when_it_cannot_import(monkeypatch):
     assert available is False, "an unimportable backend must never be advertised"
     assert devices == ()
     assert reason and "will not import" in reason and "transformers" in reason
+
+
+def test_verify_refuses_to_certify_cuda_without_a_cuda_device(monkeypatch, tmp_path, capsys):
+    """A report is a claim about hardware; it must not be produced without it.
+
+    The point of `--certify cuda-reference` is that the report's
+    `candidate_backend` names the CUDA kernels. Emitting one on a machine with
+    no GPU would recreate exactly the confusion it exists to end.
+    """
+    torch = pytest.importorskip("torch")
+    import argparse
+
+    from niverel_mamba.cli import verify
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    args = argparse.Namespace(
+        fixture="tiny", report=tmp_path / "r.json", device=None, mlx=False,
+        certify="cuda-reference",
+    )
+    assert verify.run(args) == 1
+    assert "needs a visible CUDA device" in capsys.readouterr().out
+    assert not (tmp_path / "r.json").exists(), "no report may be written"

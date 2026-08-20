@@ -165,25 +165,13 @@ jobs:
           count=$(ls dist/*.whl dist/*.tar.gz 2>/dev/null | wc -l)
           [ "$count" -ge 2 ] || { echo "::error::expected a wheel and an sdist, found $count"; exit 1; }
 
-      - name: every certification report must have passed
-        # The reports are the evidence that the attached wheels ran. Attaching
-        # a wheel whose report says `passed: false` would be exactly the
-        # unproven claim this project refuses to make.
+      - name: the reports must certify the CUDA backend, not merely be green
+        # Not `passed` alone. v0.1.0 attached six green reports from an A100 and
+        # an H100, none of which certified cuda-reference: their candidate was
+        # the portable CPU implementation. This checks *what* was certified.
         run: |
-          python - <<'PY'
-          import json, pathlib, sys
-          reports = sorted(pathlib.Path("certification").glob("*.json"))
-          if not reports:
-              sys.exit("::error::no certification report; refusing to attach CUDA wheels")
-          for path in reports:
-              data = json.loads(path.read_text())
-              status = "passed" if data.get("passed") else "FAILED"
-              print(f"{path.name}: {status} "
-                    f"({data['candidate_backend']} vs {data['reference_backend']}, "
-                    f"max_abs={data['max_abs_error']:.3e})")
-              if not data.get("passed"):
-                  sys.exit(f"::error::{path.name} did not pass")
-          PY
+          python scripts/verify_certification_reports.py --dir certification \
+            --require-arch sm80,sm90 --require-backend cuda-reference,torch-reference-cpu-chunked
 
       - uses: softprops/action-gh-release@v3
         with:

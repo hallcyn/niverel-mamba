@@ -218,9 +218,21 @@ jobs:
             "$venv/bin/niverel-mamba" doctor
 
             "$venv/bin/python" -m pytest tests/cuda tests/niverel -q
+
+            # Two campaigns, two reports, because a report certifies exactly one
+            # backend. The first is the portable implementation against its own
+            # float64 oracle -- a real gate, and a statement about
+            # torch-reference even when it runs on an A100. The second is the
+            # one that says anything about the CUDA kernels.
+            #
+            # v0.1.0 shipped only the first, on both architectures, and it was
+            # read as CUDA certification because of the hardware it ran on.
+            base="reports/certification-${{ inputs.arch }}-$target"
             "$venv/bin/niverel-mamba" verify --fixture segmented --device cuda \
-              --report "reports/certification-${{ inputs.arch }}-$target.json"
-            cat "reports/certification-${{ inputs.arch }}-$target.json"
+              --report "$base-torch-reference.json"
+            "$venv/bin/niverel-mamba" verify --fixture segmented --certify cuda-reference \
+              --report "$base-cuda-reference.json"
+            cat "$base-torch-reference.json" "$base-cuda-reference.json"
 
             rm -rf "$venv"
             echo "::endgroup::"
