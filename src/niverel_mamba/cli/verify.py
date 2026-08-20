@@ -199,12 +199,28 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
     config = fixture.config
     weights = fixture.torch_weights(dtype=torch.float32)
     inputs = fixture.torch_inputs(dtype=torch.float32)
-    x = inputs["x"].cuda()
     seq_idx = inputs.get("seq_idx")
     seq_idx = seq_idx.cuda() if seq_idx is not None else None
 
+    # Both sides get *the same data*. The reference holds bfloat16-representable
+    # values in float32 storage and computes accurately; the candidate holds
+    # true bfloat16 and runs upstream's kernels. What is left is what the
+    # kernels do differently -- which is the question a certification asks.
+    #
+    # Comparing bfloat16 output against an unrounded float32 reference measures
+    # something else entirely: the loss of bfloat16 itself. That is not a
+    # property of the CUDA backend, and it cannot be certified away. Measured on
+    # this same fixture with the portable implementation alone -- no CUDA, no
+    # upstream kernels, merely rounding inputs and weights to bfloat16 -- the
+    # deviation is already max_abs 3.01e-02 with five elements outside a
+    # 2e-02 band. The A100 running upstream's kernels gave 3.03e-02 and eleven.
+    # The band was never reachable by any correct bfloat16 implementation.
+    rounded = {k: v.float().bfloat16().float().cuda() for k, v in weights.items()}
+    x_bf16 = inputs["x"].bfloat16().cuda()
+    x_equal = x_bf16.float()
+
     portable = Mamba2(config).cuda().float()
-    portable.load_state_dict({k: v.float().cuda() for k, v in weights.items()}, strict=True)
+    portable.load_state_dict(rounded, strict=True)
     portable.eval()
 
     candidate = CudaReferenceBackend(config, device="cuda", dtype=torch.bfloat16)
@@ -227,15 +243,15 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
     )
 
     with torch.no_grad():
-        expected = portable(x)
-        actual = candidate.forward(x.to(torch.bfloat16))
+        expected = portable(x_equal)
+        actual = candidate.forward(x_bf16)
         report.add(
             compare(actual.float(), expected, name="forward", tolerance="cuda_bfloat16")
         )
 
         if seq_idx is not None:
-            expected_segmented = portable(x, seq_idx=seq_idx)
-            actual_segmented = candidate.forward(x.to(torch.bfloat16), seq_idx=seq_idx)
+            expected_segmented = portable(x_equal, seq_idx=seq_idx)
+            actual_segmented = candidate.forward(x_bf16, seq_idx=seq_idx)
             report.add(
                 compare(
                     actual_segmented.float(),
@@ -244,6 +260,24 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
                     tolerance="cuda_bfloat16",
                 )
             )
+
+        # Reported, never gated: how much precision bfloat16 costs on this
+        # fixture, whatever runs it. A user choosing bfloat16 is choosing this,
+        # and it belongs in the report as information rather than as a verdict.
+        exact = Mamba2(config).cuda().float()
+        exact.load_state_dict({k: v.float().cuda() for k, v in weights.items()}, strict=True)
+        exact.eval()
+        y_exact = exact(inputs["x"].cuda())
+        floor = (actual.float() - y_exact).abs()
+        report.metadata["bfloat16_data_floor"] = {
+            "note": (
+                "deviation of the bfloat16 candidate from an unrounded float32 "
+                "reference. Dominated by bfloat16 itself, not by the kernels; "
+                "not a pass criterion."
+            ),
+            "max_abs_error": float(floor.max()),
+            "mean_abs_error": float(floor.mean()),
+        }
 
     print(report.summary())
     if args.report:

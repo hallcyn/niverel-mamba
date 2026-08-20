@@ -80,14 +80,23 @@ def test_cuda_matches_torch_reference():
     from niverel_mamba.torch_ops.mamba2 import Mamba2
 
     config = niverel_v3_config()
+    # Equal data on both sides: the reference holds bfloat16-representable
+    # values in float32 and computes accurately, the candidate holds true
+    # bfloat16. Comparing against an unrounded float32 reference would measure
+    # the loss of bfloat16 rather than anything about these kernels -- on the
+    # segmented fixture that loss alone is max_abs 3.0e-02, outside this band,
+    # with no CUDA involved at all.
     portable = Mamba2(config).cuda().float().eval()
+    portable.load_state_dict(
+        {k: v.bfloat16().float() for k, v in portable.state_dict().items()}, strict=True
+    )
     cuda = CudaReferenceBackend(config, device="cuda", dtype=torch.bfloat16)
     cuda.load_canonical_weights(portable.state_dict())
 
-    x = torch.randn(1, 256, config.d_model, device="cuda")
+    x_bf16 = torch.randn(1, 256, config.d_model, device="cuda").bfloat16()
     with torch.no_grad():
-        expected = portable(x)
-        actual = cuda.forward(x.to(torch.bfloat16))
+        expected = portable(x_bf16.float())
+        actual = cuda.forward(x_bf16)
 
     result = compare(actual.float(), expected, name="forward", tolerance="cuda_bfloat16")
     assert result.passed, result.detail
@@ -105,18 +114,21 @@ def test_cuda_seq_idx_reset_matches():
 
     config = niverel_v3_config()
     portable = Mamba2(config).cuda().float().eval()
+    portable.load_state_dict(
+        {k: v.bfloat16().float() for k, v in portable.state_dict().items()}, strict=True
+    )
     cuda = CudaReferenceBackend(config, device="cuda", dtype=torch.bfloat16)
     cuda.load_canonical_weights(portable.state_dict())
 
     length = 512
-    x = torch.randn(1, length, config.d_model, device="cuda")
+    x_bf16 = torch.randn(1, length, config.d_model, device="cuda").bfloat16()
     seq_idx = torch.zeros(1, length, dtype=torch.int32, device="cuda")
     seq_idx[0, 137:] = 1
     seq_idx[0, 300:] = 2
 
     with torch.no_grad():
-        expected = portable(x, seq_idx=seq_idx)
-        actual = cuda.forward(x.to(torch.bfloat16), seq_idx=seq_idx)
+        expected = portable(x_bf16.float(), seq_idx=seq_idx)
+        actual = cuda.forward(x_bf16, seq_idx=seq_idx)
 
     result = compare(actual.float(), expected, name="segment_reset", tolerance="cuda_bfloat16")
     assert result.passed, result.detail
