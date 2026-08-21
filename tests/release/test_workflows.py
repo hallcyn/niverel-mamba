@@ -710,9 +710,11 @@ def test_the_cuda_gate_is_float32_and_bfloat16_is_only_measured():
 
     gated = re.findall(r'tolerance="(cuda_[a-z0-9_]+)"', source)
     assert gated, "the CUDA campaign scores nothing"
-    assert set(gated) == {"cuda_float32"}, (
-        f"the CUDA gate must be float32 only, found {sorted(set(gated))}"
+    assert set(gated) == {"cuda_float32", "cuda_float32_backward"}, (
+        f"the CUDA gates must be the float32 forward and its gradients, "
+        f"found {sorted(set(gated))}"
     )
+    assert "cuda_bfloat16" not in gated, "bfloat16 measures the format, not the kernels"
     assert 'report.metadata["bfloat16_measured"]' in source, (
         "bfloat16 must still be measured and reported, just not gated"
     )
@@ -749,25 +751,31 @@ def test_measurement_mode_reaches_the_campaign():
         assert "inputs.measure_only" in str(jobs[job_id]["with"].get("measure_only")), job_id
 
 
-def test_gradients_are_measured_against_cuda_and_not_scored():
-    """`backward` cannot leave "experimental" without evidence, and evidence
-    cannot be gathered by scoring against a band nobody has observed.
+def test_gradients_are_scored_and_their_magnitudes_recorded():
+    """A deviation without its scale is not a result.
 
-    `Capability.backward` documents its own condition: experimental until
-    gradients have been compared against CUDA. So the campaign measures them and
-    reports them, exactly as it does for bfloat16, and a later release may seal
-    what was measured. Scoring them now would repeat the mistake that cost three
-    certification runs.
+    The first gradient measurement came back as 3.03e-02 on `in_proj.weight`
+    and could not be read: nothing in the report said whether that parameter's
+    gradients were of order one or of order a hundred. They are of order
+    eighty-nine, so it was 0.034% -- but establishing that meant going back and
+    computing the scale by hand afterwards, which a report should never require.
+
+    So the reference magnitudes are recorded beside the comparisons, and the
+    cotangent is seeded: an unseeded one made the first measurement
+    unreproducible, which is no basis for sealing a band.
     """
     source = (
         Path(__file__).resolve().parent.parent.parent
         / "src" / "niverel_mamba" / "cli" / "verify.py"
     ).read_text(encoding="utf-8")
 
-    assert 'report.metadata["backward_measured"]' in source, (
-        "the campaign must measure gradients against the CUDA kernels"
+    assert 'tolerance="cuda_float32_backward"' in source, (
+        "gradients must be scored, now that their class has been measured"
     )
-    scored = set(re.findall(r'tolerance="(cuda_[a-z0-9_]+)"', source))
-    assert scored == {"cuda_float32"}, (
-        f"gradients must not be scored while unmeasured; scored classes: {sorted(scored)}"
+    # The assignment, not the string: an earlier version of this check was
+    # satisfied by the print statement that displays the magnitudes, and so
+    # passed a campaign that had stopped recording them.
+    assert 'report.metadata["backward_reference_magnitudes"] = {' in source, (
+        "the magnitudes the deviations are read against must be in the report"
     )
+    assert "manual_seed" in source, "the cotangent must be seeded"

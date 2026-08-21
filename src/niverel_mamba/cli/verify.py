@@ -309,72 +309,105 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
             }
     report.metadata["bfloat16_measured"] = measured
 
-    # ---- measured, never gated: gradients against the CUDA kernels -----------
+    # ---- the second gate: gradients ----------------------------------------
     #
-    # `backward` is published as "experimental" and `training` as false, and the
-    # reason is written into Capability itself: gradients had never been
-    # compared against CUDA. Everything else about the portable backward is
-    # proven -- gradients reach every parameter, chunked agrees with the
-    # sequential oracle, no gradient crosses a strict-reset boundary, and a
-    # float64 gradcheck matches analytic against numeric. None of that says the
-    # upstream kernels differentiate the same way.
+    # `Capability.backward` states its own condition: experimental until
+    # gradients have been compared against CUDA. This is that comparison.
     #
-    # Measured here rather than scored, because scoring against a band nobody
-    # has observed is what cost three certification runs. Once a release has
-    # reported these numbers they can be sealed, and only then may `backward`
-    # claim anything more.
-    backward: dict[str, Any] = {
-        "note": (
-            "gradients of cuda-reference against torch-reference at equal float32 "
-            "data. Reported, not gated: no tolerance class has observed these yet, "
-            "and `backward` stays experimental until one has."
+    # Scored per parameter and elementwise, because gradient magnitudes differ
+    # by more than an order of magnitude between parameters -- max|grad| runs
+    # from 3.9 on A_log to 104 on out_proj.weight on the segmented fixture -- so
+    # a single absolute figure would be meaningless read across them.
+    #
+    # The cotangent is seeded. An unseeded one made the first measurement
+    # unreproducible: the numbers were real but no second run could confirm
+    # them, which is not a basis for sealing anything.
+    generator = torch.Generator(device=x.device).manual_seed(20260821)
+    cotangent = torch.randn(x.shape, generator=generator, device=x.device, dtype=x.dtype)
+
+    def _grads(model: Any, forward: Any) -> tuple[Any, dict[str, Any]]:
+        for parameter in model.parameters():
+            parameter.grad = None
+        source = x.detach().clone().requires_grad_(True)
+        (forward(source) * cotangent).sum().backward()
+        return source.grad, {
+            name: parameter.grad
+            for name, parameter in model.named_parameters()
+            if parameter.grad is not None
+        }
+
+    reference_input, reference_params = _grads(exact, lambda t: exact(t))
+    candidate_input, candidate_params = _grads(
+        candidate32.module, lambda t: candidate32.forward(t)
+    )
+
+    only_one_side = sorted(set(reference_params) ^ set(candidate_params))
+    if only_one_side:
+        # A parameter that receives a gradient on one side and not the other is
+        # a contract failure, not a tolerance question.
+        print(f"::error::gradients differ in *shape*: {only_one_side} on one side only")
+        report.metadata["backward_error"] = f"parameters on one side only: {only_one_side}"
+        if args.report:
+            print(f"\nwrote {report.write(args.report)}")
+        return 0 if args.measure else 1
+
+    def _normalised(candidate: Any, reference: Any) -> tuple[Any, Any]:
+        """Divide both by the reference's peak, so the band is scale-free.
+
+        Gradient magnitudes are set by the cotangent, and so is the deviation:
+        both scale together. Measured across twelve draws on this fixture,
+        max|grad| moves by a factor of 3.09 between the smallest and largest --
+        so a band in absolute units calibrated on one draw is calibrated on
+        nothing. The first version of this gate was: 3.03e-02 observed, 1.0e-01
+        sealed, and a plausible 9.4e-02 on another draw. A margin of 1.1, found
+        before it cost a rental rather than after.
+        Normalised, the quantity is the relative deviation, which is a property
+        of the arithmetic rather than of the draw: 3.4e-04 on the worst
+        parameter, 6.2e-04 on the input gradient.
+        """
+        peak = reference.abs().max()
+        if peak == 0:
+            return candidate, reference
+        return candidate / peak, reference / peak
+
+    report.add(
+        compare(
+            *_normalised(candidate_input, reference_input),
+            name="input_grad_float32",
+            tolerance="cuda_float32_backward",
         )
+    )
+    for name in sorted(reference_params):
+        report.add(
+            compare(
+                *_normalised(candidate_params[name], reference_params[name]),
+                name=f"grad_{name}",
+                tolerance="cuda_float32_backward",
+            )
+        )
+
+    # The magnitudes the deviations should be read against, so a report means
+    # something on its own. Their absence is why the first measurement -- worst
+    # parameter 3.03e-02 -- could not be interpreted without going back to a
+    # machine and computing the scale by hand.
+    # The comparisons above are normalised, so the raw figures are recorded
+    # here: a reader should be able to see both what deviated and how large the
+    # thing that deviated was, without recomputing anything.
+    report.metadata["backward_reference_magnitudes"] = {
+        "input_grad_max_abs": float(reference_input.abs().max()),
+        "input_grad_deviation_max_abs": float((candidate_input - reference_input).abs().max()),
+        **{
+            key: value
+            for name, grad in sorted(reference_params.items())
+            for key, value in (
+                (f"grad_{name}_max_abs", float(grad.abs().max())),
+                (
+                    f"grad_{name}_deviation_max_abs",
+                    float((candidate_params[name] - grad).abs().max()),
+                ),
+            )
+        },
     }
-    try:
-        # The output has the input's shape, and both sides must be pushed by
-        # the same cotangent or the comparison is of two different quantities.
-        cotangent = torch.randn_like(x)
-
-        def _grads(model: Any, forward: Any) -> tuple[Any, dict[str, Any]]:
-            for parameter in model.parameters():
-                parameter.grad = None
-            source = x.detach().clone().requires_grad_(True)
-            (forward(source) * cotangent).sum().backward()
-            return source.grad, {
-                name: parameter.grad
-                for name, parameter in model.named_parameters()
-                if parameter.grad is not None
-            }
-
-        reference_input, reference_params = _grads(exact, lambda t: exact(t))
-        candidate_input, candidate_params = _grads(
-            candidate32.module, lambda t: candidate32.forward(t)
-        )
-
-        shared = sorted(set(reference_params) & set(candidate_params))
-        worst = max(
-            (
-                (float((candidate_params[n] - reference_params[n]).abs().max()), n)
-                for n in shared
-            ),
-            default=(0.0, "-"),
-        )
-        backward.update(
-            {
-                "parameters_compared": len(shared),
-                "parameters_only_on_one_side": sorted(
-                    set(reference_params) ^ set(candidate_params)
-                ),
-                "worst_parameter": worst[1],
-                "worst_parameter_max_abs": worst[0],
-                "input_grad_max_abs": float(
-                    (candidate_input - reference_input).abs().max()
-                ),
-            }
-        )
-    except Exception as exc:  # a measurement that cannot be taken is reported as such
-        backward["error"] = f"{type(exc).__name__}: {exc}"
-    report.metadata["backward_measured"] = backward
 
     if args.measure:
         report.metadata["mode"] = "measurement"
@@ -385,10 +418,9 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
         )
 
     print(report.summary())
-    print("\ngradients, measured and not gated:")
-    for key, value in report.metadata["backward_measured"].items():
-        if key != "note":
-            print(f"  {key}: {value}")
+    print("\ngradient magnitudes these deviations are read against:")
+    for key, value in report.metadata["backward_reference_magnitudes"].items():
+        print(f"  {key}: {value:.4f}")
     print("\nbfloat16, measured and not gated:")
     for name, values in measured.items():
         if name == "note":
