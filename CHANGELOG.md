@@ -37,7 +37,18 @@ Three claims brought in line with the evidence behind them.
   is what cost three certification runs.
 * `install-backend cuda` is exercised end to end against the published release
   index on every relevant pull request, on a free Linux runner. The command had
-  been broken for an entire release because nothing ever ran it.
+  been broken for an entire release because nothing ever ran it -- and the very
+  first run found a second break: it installed `transformers` but not `einops`,
+  which upstream imports at start-up, so it produced an environment whose
+  package would not import. Every environment that had exercised the command
+  before also carried einops for other reasons.
+
+### Fixed
+
+* `install-backend cuda` installs `einops` and `huggingface_hub` alongside
+  `transformers`. The list is now derived from upstream's own import graph and
+  checked against it, rather than recorded from a bisect that happened to stop
+  early.
 
 ### Unchanged, deliberately
 
