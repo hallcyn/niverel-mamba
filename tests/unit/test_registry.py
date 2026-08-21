@@ -87,17 +87,40 @@ def test_unavailable_backend_explains_why():
     assert "mamba-ssm" in (status.reason or "")
 
 
-def test_cuda_reference_is_not_yet_the_official_reference():
-    """It wraps upstream, but wrapping is not certifying.
+def test_cuda_reference_is_certified_but_never_the_reference():
+    """Wrapping upstream is not certifying, and being certified is not being *the* reference.
 
-    It may only claim REFERENCE once a GPU certification job has produced a
-    real report. Until then this assertion keeps the claim honest.
+    `REFERENCE` names the backend that produces or certifies a result, which
+    here is torch-reference. cuda-reference is compared against it and passes,
+    which is what NUMERICALLY_CERTIFIED means and all it may ever claim.
+
+    It reached that status on release run 32455074823, measured on an A100 and
+    an H100 across all three runtimes. The earlier form of this test asserted
+    EXPERIMENTAL and is what kept the claim honest until then; this form keeps
+    the remaining one honest.
     """
     from niverel_mamba.registry import BACKENDS
 
     spec = BACKENDS["cuda-reference"]
     assert spec.official_reference is False
-    assert spec.certification is Certification.EXPERIMENTAL
+    assert spec.certification is Certification.NUMERICALLY_CERTIFIED
+    assert spec.certification is not Certification.REFERENCE
+
+
+def test_a_certified_backend_has_evidence_behind_its_class():
+    """A published status must be backed by an observed tolerance, not a guess.
+
+    Three certification runs were lost to bands sized for arithmetic the
+    hardware does not perform. A backend may not advertise certification while
+    the class it was scored against has never been measured.
+    """
+    from niverel_mamba.certification.tolerances import load_tolerances
+
+    table = load_tolerances()
+    assert table["cuda_float32"].observed, (
+        "cuda-reference is published as certified, so its gate must carry the "
+        "measurement it was certified under"
+    )
 
 
 def test_mlx_is_experimental_until_parity_is_published():

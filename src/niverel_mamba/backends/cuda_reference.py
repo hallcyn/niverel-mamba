@@ -8,11 +8,16 @@ What it adds is the contract: weights are validated against the canonical
 schema before being handed over, so a checkpoint that loads here loads
 everywhere.
 
-**Status.** This backend is published as ``experimental``, not ``reference``.
-It becomes the reference only once a GPU certification job has produced an
-actual report -- see ``certify-cuda-sm80.yml``. Shipping it as ``reference``
-on the strength of "it wraps upstream" would be precisely the unproven claim
-the brief forbids.
+**Status.** ``numerically-certified``, and deliberately not ``reference``:
+``reference`` names the backend that *produces or certifies* a result, which
+here is ``torch-reference``. This one is compared against it and passes, which
+is exactly what ``numerically-certified`` means.
+
+It earned that on release run 32455074823, measured on an A100 and an H100
+across all three runtimes: max_abs 2.5e-03 in float32 against the portable
+backend, cosine similarity 0.999999988, bit-identical on both architectures.
+The band it passes under is sealed in ``certification/tolerances.yaml`` and was
+set from that measurement, not before it.
 
 If the required wheels are absent, constructing this backend raises
 :class:`BackendUnavailableError`. It never falls back to CPU.
@@ -81,7 +86,7 @@ class CudaReferenceBackend(Backend):
 
     name = "cuda-reference"
     framework = "torch"
-    certification = Certification.EXPERIMENTAL
+    certification = Certification.NUMERICALLY_CERTIFIED
     capability = Capability(inference=True, backward="experimental", training=False)
     official_reference = False
 

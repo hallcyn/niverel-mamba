@@ -11,6 +11,58 @@ versioning follows the scheme in the project brief:
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-08-21
+
+`cuda-reference` is certified. Everything else here is what it took to certify
+it honestly.
+
+### Certified
+
+* `cuda-reference` moves from `experimental` to `numerically-certified`,
+  measured on an A100 (sm_80) and an H100 (sm_90) across all three CUDA
+  runtimes: max_abs **2.5e-03** against the portable backend in float32,
+  cosine similarity **0.999999988**, bit-identical on both architectures.
+  It is deliberately not `reference` -- that names the backend which *produces
+  or certifies* a result, and here that is `torch-reference`.
+* `cuda_float32` is sealed from that measurement, with the derivation recorded:
+  upstream's `tl.dot` calls pass no `allow_tf32`, so Ampere and Hopper multiply
+  in TF32, ten mantissa bits, one epsilon of 4.9e-04.
+* `cuda_bfloat16` is recorded as a **measurement and never a gate**. Gating on
+  it measures the number format: rounding inputs and weights to bfloat16
+  deviates by 3.0e-02 with the portable implementation alone, no CUDA involved.
+
+### Fixed
+
+* `install-backend cuda` works again. It had been broken since the release
+  started shipping one archive per runtime, because the build manifests carry
+  `"url": null`. The release now publishes an index naming each archive, its
+  URL and SHA-256, and the SHA-256 of every wheel inside it; the command
+  verifies the archive before unpacking and each wheel before installing.
+* Publishing moved out of a reusable workflow. PyPI verifies a PEP 740
+  attestation against the entry workflow while matching the Trusted Publisher
+  against the reusable one, so no configuration satisfied both.
+* The certification pod is required to carry a CUDA 13.0 driver, and refuses
+  early if it does not. Two of the three runtimes are cu130 and a 12.x driver
+  cannot run them.
+* `cuda-reference` no longer reports as available on the strength of installed
+  metadata alone: upstream's `__init__` needs `transformers`, which `--no-deps`
+  does not install, and a package that will not import is not available.
+
+### Added
+
+* `verify --certify cuda-reference` produces a report whose candidate really is
+  the CUDA backend. The reports shipped with 0.1.0 were produced on GPUs and
+  certified the portable CPU implementation.
+* `--measure` reports every comparison without passing judgement, so a run on
+  rented hardware yields evidence instead of stopping at the first band nobody
+  has observed.
+* `ci-certify-rehearsal` runs everything the certification pod does except the
+  numerical comparison, on a free Linux runner.
+* `wheel_run_id`, `certify_only` and `measure_only` on the release workflow, so
+  a release need not rebuild wheels that cannot differ or re-rent GPUs that
+  have already answered.
+
+
 ## [0.1.0] — 2026-08-17
 
 First release. Portable Mamba2 with one weight contract and honest per-backend
