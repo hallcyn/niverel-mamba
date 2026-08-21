@@ -61,6 +61,10 @@ it honestly.
 * `wheel_run_id`, `certify_only` and `measure_only` on the release workflow, so
   a release need not rebuild wheels that cannot differ or re-rent GPUs that
   have already answered.
+* `resolve-wheels` finds a past build with the same inputs and reuses it, so a
+  plain `git push origin v0.1.1` no longer rebuilds seventy minutes of wheels
+  per runtime. It compares the Dockerfiles, the target matrix and the pinned
+  upstream versions by blob SHA at both commits, and rebuilds on any doubt.
 
 
 ## [0.1.0] — 2026-08-17

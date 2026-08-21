@@ -617,25 +617,45 @@ def test_the_release_publishes_the_index_install_backend_needs():
 def test_a_release_can_reuse_wheels_it_did_not_build():
     """Seventy minutes per runtime, for an artefact that cannot differ.
 
-    The wheels are upstream's, at pinned versions, from unchanged Dockerfiles.
-    Rebuilding them for a release that only changes this package's own code is
-    pure cost, so `wheel_run_id` nominates an existing build -- and the
-    certification and the release must both read from that run, or the release
-    would attach wheels other than the ones certified.
+    The wheels are upstream's, at pinned versions, from Dockerfiles that change
+    rarely. A release touching only this package's own code rebuilds a
+    byte-for-byte equivalent, so `resolve-wheels` looks for a run that already
+    built them from the same inputs.
+
+    It has to be a *job*, not an input. A tag push cannot pass `wheel_run_id`,
+    so while the reuse lived only in that input the only way to avoid rebuilding
+    on a tag was to cancel the run the tag had just started and dispatch a
+    second one by hand.
     """
     jobs = _workflows()["release.yml"]["jobs"]
-    assert "wheel_run_id" in str(jobs["build-cuda"].get("if")), (
-        "build-cuda must be skipped when wheels are nominated"
+
+    resolve = jobs["resolve-wheels"]
+    assert "run_id" in (resolve.get("outputs") or {}), "resolve-wheels must publish a run id"
+    assert resolve.get("permissions", {}).get("actions") == "read", (
+        "reading another run's artifacts needs actions: read"
+    )
+    script = "".join(str(s.get("run", "")) for s in resolve["steps"])
+    assert "inputs.wheel_run_id" in str(resolve["steps"]) or "EXPLICIT" in script, (
+        "an explicitly nominated run must still win"
+    )
+    assert "find_reusable_wheels.py" in script
+
+    # Nothing may reach the wheels except through what was resolved.
+    assert "resolve-wheels" in str(jobs["build-cuda"].get("needs"))
+    assert "needs.resolve-wheels.outputs.run_id == ''" in str(jobs["build-cuda"]["if"]), (
+        "build-cuda must be skipped when a reusable run was found"
     )
     for job_id in ("certify-sm80", "certify-sm90"):
-        assert "inputs.wheel_run_id" in str(jobs[job_id]["with"].get("wheel_run_id")), job_id
+        assert "needs.resolve-wheels.outputs.run_id" in str(jobs[job_id]["with"]["wheel_run_id"]), (
+            f"{job_id} must certify the wheels that were resolved"
+        )
 
     download = next(
         s for s in jobs["github-release"]["steps"]
         if str((s.get("with") or {}).get("pattern", "")).startswith("cuda-wheels")
     )
-    assert "inputs.wheel_run_id" in str(download["with"]["run-id"]), (
-        "the release must attach the wheels from the run that was certified"
+    assert "needs.resolve-wheels.outputs.run_id" in str(download["with"]["run-id"]), (
+        "the release must attach the wheels that were certified"
     )
 
 
