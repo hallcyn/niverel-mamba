@@ -119,3 +119,55 @@ def test_float64_precision_is_not_lost_in_conversion():
 
     tensor = torch.tensor([1.0 + 1e-12], dtype=torch.float64)
     assert to_numpy(tensor)[0] != 1.0
+
+
+def test_the_gradient_gate_is_scale_free_and_keeps_its_margin():
+    """A band in absolute units cannot be calibrated on one cotangent draw.
+
+    Gradient magnitudes are set by the cotangent and so is the deviation; both
+    move together. Across twelve draws on the segmented fixture max|grad| varies
+    by a factor of 3.09, so a band calibrated on a single draw has no defensible
+    margin. The first version of this row had exactly that: 3.03e-02 observed,
+    1.0e-01 sealed, and a plausible 9.4e-02 on another draw -- a margin of 1.1.
+
+    Normalising by the reference's peak makes the quantity the *relative*
+    deviation, which is a property of the arithmetic rather than of the draw.
+    So the observations must be recorded in those units, and the margin must be
+    real without being so wide the gate stops meaning anything.
+    """
+    tolerance = load_tolerances()["cuda_float32_backward"]
+    observed = tolerance.observed
+    assert observed, "the gate must carry its measurement"
+
+    relative = [
+        float(value) for key, value in observed.items() if key.endswith("_relative")
+    ]
+    assert relative, (
+        "the observations must be in relative units, or the band is calibrated "
+        "on one draw of a quantity that varies by a factor of three"
+    )
+
+    worst = max(relative)
+    assert tolerance.atol > worst, "the band is below its own measurement"
+    assert tolerance.atol < 20 * worst, (
+        f"the band ({tolerance.atol}) is more than twenty times the worst "
+        f"observation ({worst}); a gradient error large enough to matter would "
+        "pass through it"
+    )
+    # TF32 carries ten mantissa bits: one epsilon is 4.9e-04. A band a few
+    # epsilons wide is the arithmetic; a hundred would be an opinion.
+    assert tolerance.atol < 20 * 4.9e-4
+
+
+def test_the_gradient_comparison_normalises_before_scoring():
+    """The band above only means anything if the campaign divides first."""
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parent.parent.parent
+        / "src" / "niverel_mamba" / "cli" / "verify.py"
+    ).read_text(encoding="utf-8")
+    assert "_normalised(" in source
+    assert "peak = reference.abs().max()" in source, (
+        "gradients must be divided by the reference peak before comparison"
+    )

@@ -106,41 +106,44 @@ classes:
       cosine_similarity: 0.999999988
 
   cuda_float32_backward:
-    atol: 1.0e-1
-    rtol: 2.0e-3
-    rel_floor: 1.0e-1
+    atol: 3.0e-3
+    rtol: 3.0e-3
+    rel_floor: 1.0e-2
     description: >-
       Gradients of cuda-reference against torch-reference, both float32, on the
       same GPU, pushed by the same seeded cotangent. This is the condition
       `Capability.backward` states for itself, and passing it is what lets
       `backward` and `training` stop being provisional.
-      Scored per parameter and elementwise. Gradient magnitudes differ by more
-      than an order of magnitude between parameters on the segmented fixture --
-      max|grad| runs from 3.91 on A_log to 104.21 on out_proj.weight -- so a
-      single absolute figure read across them would mean nothing.
-      The band follows the same reasoning as `cuda_float32` above: upstream
-      multiplies in TF32, ten mantissa bits, one epsilon of 4.9e-04. The
-      observed deviations are *below* that in relative terms, which is the
-      result: the kernels differentiate as accurately as they compute.
-      `atol` is 1.0e-1, three times the worst observed absolute deviation and
-      about 0.6% of the gradient RMS. The margin is deliberate: the first
-      measurement used an unseeded cotangent and cannot be reproduced exactly,
-      so the band accommodates a different draw from the same distribution
-      rather than the single draw that was seen.
+      Both sides are divided by the reference's peak before comparing, so the
+      band is scale-free. That is not a detail. Gradient magnitudes are set by
+      the cotangent and so is the deviation; both move together. Measured across
+      twelve draws on the segmented fixture, max|grad| varies by a factor of
+      3.09 between the smallest and the largest, so a band in absolute units
+      calibrated on one draw is calibrated on nothing. The first version of this
+      row was exactly that mistake -- 3.03e-02 observed, 1.0e-01 sealed, and a
+      plausible 9.4e-02 on a different draw, leaving a margin of 1.1. It was
+      caught before it cost a rental rather than after, which is the only
+      difference between it and the three that did.
+      Normalised, what is measured is the relative deviation, a property of the
+      arithmetic and not of the draw. Upstream multiplies in TF32: ten mantissa
+      bits, one epsilon of 4.9e-04. The observations are below that. The band is
+      six to nine times them, which still catches anything algebraic -- a
+      mishandled reset or a wrong chunk boundary moves a gradient by a
+      noticeable fraction of its own size, not by a thousandth.
     observed:
-      # Release run 32478644509, segmented fixture, A100 (sm_80) and H100
-      # (sm_90). Deviations measured on the GPUs; the magnitudes they are read
-      # against were computed on CPU from the same fixture and weights.
+      # Deviations measured on release run 32478644509 (A100 sm_80 and H100
+      # sm_90); the magnitudes they are divided by were computed on CPU from the
+      # same fixture and weights.
       hardware: NVIDIA A100-SXM4-80GB (sm_80) and NVIDIA H100 80GB HBM3 (sm_90)
       parameters_compared: 8
       parameters_on_one_side_only: 0
       worst_parameter: in_proj.weight
-      worst_parameter_max_abs: 3.032e-2
-      worst_parameter_reference_max_abs: 88.67
       worst_parameter_relative: 3.4e-4
-      input_grad_max_abs: 6.477e-3
-      input_grad_reference_max_abs: 10.45
+      worst_parameter_raw_max_abs: 3.032e-2
+      worst_parameter_reference_max_abs: 88.67
       input_grad_relative: 6.2e-4
+      input_grad_raw_max_abs: 6.477e-3
+      input_grad_reference_max_abs: 10.45
 
   cuda_bfloat16:
     atol: 2.0e-2

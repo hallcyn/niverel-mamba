@@ -19,6 +19,11 @@ The last provisional claim in the package is settled.
 
 * Gradients of `cuda-reference` are compared against `torch-reference` on every
   certification and **scored**, under the new `cuda_float32_backward` class.
+  Both sides are divided by the reference's peak first, so the band is
+  scale-free: gradient magnitudes are set by the cotangent and so is the
+  deviation, and across twelve draws on this fixture max|grad| varies by a
+  factor of 3.09. A band in absolute units calibrated on one draw is calibrated
+  on nothing.
   Measured on an A100 and an H100: the worst parameter, `in_proj.weight`,
   deviates by 3.03e-02 against gradients whose magnitude is 88.67 -- **0.034%**
   -- and the input gradient by 6.48e-03 against 10.45, **0.062%**. Both are
