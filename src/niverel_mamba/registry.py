@@ -150,7 +150,17 @@ BACKENDS: dict[str, BackendSpec] = {
         name="mlx",
         framework="mlx",
         devices=("gpu",),
-        certification=Certification.EXPERIMENTAL,
+        # Compared against torch-reference under a sealed tolerance and passing,
+        # which is what numerically-certified means. `mlx_float32` was measured
+        # on the real Foundation V3 block: 1.15e-05 against torch CPU, with the
+        # chunked path at 3.6e-06 against MLX's own sequential oracle and
+        # forward == concat(step) at 8.6e-06. ci-mlx re-runs the nine parity
+        # tests on macOS with real MLX on every push, so this is continuous
+        # evidence rather than one measurement.
+        #
+        # `backward=False` stays: MLX has no backward path here, and that is an
+        # absence, not an unproven claim.
+        certification=Certification.NUMERICALLY_CERTIFIED,
         capability=Capability(inference=True, backward=False, training=False),
         official_reference=False,
         summary="Pure MLX implementation for Apple Silicon.",

@@ -747,3 +747,27 @@ def test_measurement_mode_reaches_the_campaign():
     jobs = _workflows()["release.yml"]["jobs"]
     for job_id in ("certify-sm80", "certify-sm90"):
         assert "inputs.measure_only" in str(jobs[job_id]["with"].get("measure_only")), job_id
+
+
+def test_gradients_are_measured_against_cuda_and_not_scored():
+    """`backward` cannot leave "experimental" without evidence, and evidence
+    cannot be gathered by scoring against a band nobody has observed.
+
+    `Capability.backward` documents its own condition: experimental until
+    gradients have been compared against CUDA. So the campaign measures them and
+    reports them, exactly as it does for bfloat16, and a later release may seal
+    what was measured. Scoring them now would repeat the mistake that cost three
+    certification runs.
+    """
+    source = (
+        Path(__file__).resolve().parent.parent.parent
+        / "src" / "niverel_mamba" / "cli" / "verify.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'report.metadata["backward_measured"]' in source, (
+        "the campaign must measure gradients against the CUDA kernels"
+    )
+    scored = set(re.findall(r'tolerance="(cuda_[a-z0-9_]+)"', source))
+    assert scored == {"cuda_float32"}, (
+        f"gradients must not be scored while unmeasured; scored classes: {sorted(scored)}"
+    )

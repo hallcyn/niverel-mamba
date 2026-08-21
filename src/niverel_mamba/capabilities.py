@@ -134,7 +134,23 @@ def _module_available(name: str, distribution_name: str | None = None) -> bool:
 #: Upstream's own import-time requirements that its wheels do not carry when
 #: installed with ``--no-deps`` -- which is how they must be installed, since
 #: that is what protects the pinned torch build from being replaced.
-UPSTREAM_RUNTIME_REQUIREMENTS = ("transformers",)
+#:
+#: Derived from upstream's import graph rather than guessed: walking the hard
+#: imports from ``mamba_ssm/__init__`` reaches thirty-one modules and six
+#: external names. Three need no action -- ``packaging`` is a core dependency
+#: here, ``triton`` ships with the CUDA torch build, and ``selective_scan_cuda``
+#: is the compiled extension inside the wheel itself. These three are what is
+#: left.
+#:
+#: ``huggingface_hub`` is listed even though ``transformers`` depends on it,
+#: because ``mamba_ssm/modules/mamba2.py`` imports it directly. Inheriting a
+#: direct import through someone else's dependency is a bet on their packaging.
+#:
+#: ``einops`` was missing until `install-backend` was finally run in a clean
+#: environment: every environment that had exercised it before also carried
+#: einops for other reasons, so `import mamba_ssm.modules.mamba2` succeeded and
+#: the gap stayed invisible.
+UPSTREAM_RUNTIME_REQUIREMENTS = ("einops", "huggingface_hub", "transformers")
 
 
 def upstream_mamba2_importable() -> tuple[bool, str | None]:

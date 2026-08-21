@@ -11,6 +11,56 @@ versioning follows the scheme in the project brief:
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-08-21
+
+Three claims brought in line with the evidence behind them.
+
+### Certified
+
+* `mlx` moves from `experimental` to `numerically-certified`. `mlx_float32` is
+  measured on the real Foundation V3 block -- 1.15e-05 against torch CPU, the
+  chunked path at 3.6e-06 against MLX's own sequential oracle, and
+  `forward == concat(step)` at 8.6e-06 -- and `ci-mlx` re-runs the nine parity
+  tests on macOS with real MLX on every push, so this is continuous evidence
+  rather than one measurement.
+  Its capability is unchanged: `backward: false`, because MLX has no backward
+  path here. A certified backend is not thereby a complete one.
+
+### Added
+
+* Gradients of `cuda-reference` are now measured against `torch-reference` on
+  every certification run and written into the report under
+  `backward_measured`. `Capability.backward` states its own condition --
+  experimental until gradients have been compared against CUDA -- and this is
+  what will let that condition be met. It is **measured and not scored**: no
+  tolerance class has observed it yet, and scoring against an unobserved band
+  is what cost three certification runs.
+* `install-backend cuda` is exercised end to end against the published release
+  index on every relevant pull request, on a free Linux runner. The command had
+  been broken for an entire release because nothing ever ran it -- and the very
+  first run found a second break: it installed `transformers` but not `einops`,
+  which upstream imports at start-up, so it produced an environment whose
+  package would not import. Every environment that had exercised the command
+  before also carried einops for other reasons.
+
+### Fixed
+
+* `install-backend cuda` installs `einops` and `huggingface_hub` alongside
+  `transformers`. The list is now derived from upstream's own import graph and
+  checked against it, rather than recorded from a bisect that happened to stop
+  early.
+
+### Unchanged, deliberately
+
+* `backward` stays `experimental` and `training` stays `false` on every
+  backend. The portable backward is thoroughly proven -- gradients reach every
+  parameter, the chunked path agrees with the sequential oracle, none crosses a
+  strict-reset boundary, and a float64 gradcheck matches analytic against
+  numeric -- but none of that says upstream's kernels differentiate the same
+  way. A test refuses to let the claim move until a tolerance class has
+  observed that comparison.
+
+
 ## [0.1.1] — 2026-08-21
 
 `cuda-reference` is certified. Everything else here is what it took to certify

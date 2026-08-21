@@ -123,10 +123,28 @@ def test_a_certified_backend_has_evidence_behind_its_class():
     )
 
 
-def test_mlx_is_experimental_until_parity_is_published():
+def test_mlx_is_certified_for_what_it_actually_does():
+    """Parity was published, so the status follows -- and only that far.
+
+    `mlx_float32` is measured on the real Foundation V3 block and ci-mlx re-runs
+    the nine parity tests on macOS with real MLX on every push. That earns
+    NUMERICALLY_CERTIFIED for inference.
+
+    It earns nothing for backward, which MLX does not implement here. That is an
+    absence rather than an unproven claim, and the capability must keep saying
+    so: a certified backend is not thereby a complete one.
+    """
+    from niverel_mamba.certification.tolerances import load_tolerances
     from niverel_mamba.registry import BACKENDS
 
-    assert BACKENDS["mlx"].certification is Certification.EXPERIMENTAL
+    spec = BACKENDS["mlx"]
+    assert spec.certification is Certification.NUMERICALLY_CERTIFIED
+    assert spec.certification is not Certification.REFERENCE
+    assert spec.capability.backward is False, "MLX has no backward path here"
+    assert spec.capability.training is False
+    assert load_tolerances()["mlx_float32"].observed, (
+        "a published certification must carry the measurement behind it"
+    )
 
 
 def test_no_backend_claims_training():
