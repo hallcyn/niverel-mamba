@@ -156,3 +156,73 @@ jobs:
           echo "$out" | grep -q "nothing certifies \['cuda-reference'\]" \
             || { echo "::error::the gate refused, but not for the reason it should have"; exit 1; }
           echo "gate refused an uncertified set, as it must"
+
+  install-backend:
+    # The first command a user actually types, run against the published index.
+    #
+    # It had been broken for a whole release without anyone noticing, because
+    # nothing ever ran it: the per-runtime build manifests carry `"url": null`,
+    # so there was nothing to fetch. Offline tests caught the logic afterwards;
+    # this catches the parts only a real release has -- that the index is
+    # attached, that its URLs resolve, that the SHA-256 in it match the bytes
+    # GitHub serves, and that the wheels inside import.
+    #
+    # No GPU: downloading, verifying and installing need no device.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: { python-version: "3.12" }
+
+      - name: the index of the latest published release
+        id: index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.release }}"
+          [ -n "$tag" ] || tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          # Deliberately the published index rather than this checkout's version:
+          # a pull request that bumps the version has no release of its own yet,
+          # and the mechanism is what is being tested, not the number.
+          echo "url=https://github.com/${{ github.repository }}/releases/download/$tag/cuda-manifest.json" \
+            >> "$GITHUB_OUTPUT"
+          echo "testing against $tag"
+
+      - name: a user's environment - torch, then the command
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet torch==2.11.0 \
+            --index-url https://download.pytorch.org/whl/cu128
+          python -m pip install --quiet .
+
+      - name: the plan must install nothing
+        run: |
+          set -euo pipefail
+          out=$(niverel-mamba install-backend cuda --manifest "${{ steps.index.outputs.url }}")
+          echo "$out"
+          echo "$out" | grep -q "Nothing was downloaded or installed" \
+            || { echo "::error::the plan is not plan-only"; exit 1; }
+          python -c "
+          import importlib.util, sys
+          sys.exit(0 if importlib.util.find_spec('mamba_ssm') is None else 1)" \
+            || { echo "::error::the plan installed something"; exit 1; }
+
+      - name: and --yes must install wheels that import
+        run: |
+          set -euo pipefail
+          niverel-mamba install-backend cuda --yes --manifest "${{ steps.index.outputs.url }}"
+          python -c "
+          from mamba_ssm.modules.mamba2 import Mamba2
+          import mamba_ssm, causal_conv1d
+          print('installed and importable:', mamba_ssm.__version__, causal_conv1d.__version__)"
+
+      - name: doctor must still be honest about having no GPU
+        run: |
+          set +e
+          out=$(niverel-mamba doctor); set -e
+          echo "$out"
+          echo "$out" | grep -q 'cuda-reference *no' \
+            || { echo "::error::doctor claims cuda-reference without a device"; exit 1; }

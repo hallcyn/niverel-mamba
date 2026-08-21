@@ -309,6 +309,73 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
             }
     report.metadata["bfloat16_measured"] = measured
 
+    # ---- measured, never gated: gradients against the CUDA kernels -----------
+    #
+    # `backward` is published as "experimental" and `training` as false, and the
+    # reason is written into Capability itself: gradients had never been
+    # compared against CUDA. Everything else about the portable backward is
+    # proven -- gradients reach every parameter, chunked agrees with the
+    # sequential oracle, no gradient crosses a strict-reset boundary, and a
+    # float64 gradcheck matches analytic against numeric. None of that says the
+    # upstream kernels differentiate the same way.
+    #
+    # Measured here rather than scored, because scoring against a band nobody
+    # has observed is what cost three certification runs. Once a release has
+    # reported these numbers they can be sealed, and only then may `backward`
+    # claim anything more.
+    backward: dict[str, Any] = {
+        "note": (
+            "gradients of cuda-reference against torch-reference at equal float32 "
+            "data. Reported, not gated: no tolerance class has observed these yet, "
+            "and `backward` stays experimental until one has."
+        )
+    }
+    try:
+        # The output has the input's shape, and both sides must be pushed by
+        # the same cotangent or the comparison is of two different quantities.
+        cotangent = torch.randn_like(x)
+
+        def _grads(model: Any, forward: Any) -> tuple[Any, dict[str, Any]]:
+            for parameter in model.parameters():
+                parameter.grad = None
+            source = x.detach().clone().requires_grad_(True)
+            (forward(source) * cotangent).sum().backward()
+            return source.grad, {
+                name: parameter.grad
+                for name, parameter in model.named_parameters()
+                if parameter.grad is not None
+            }
+
+        reference_input, reference_params = _grads(exact, lambda t: exact(t))
+        candidate_input, candidate_params = _grads(
+            candidate32.module, lambda t: candidate32.forward(t)
+        )
+
+        shared = sorted(set(reference_params) & set(candidate_params))
+        worst = max(
+            (
+                (float((candidate_params[n] - reference_params[n]).abs().max()), n)
+                for n in shared
+            ),
+            default=(0.0, "-"),
+        )
+        backward.update(
+            {
+                "parameters_compared": len(shared),
+                "parameters_only_on_one_side": sorted(
+                    set(reference_params) ^ set(candidate_params)
+                ),
+                "worst_parameter": worst[1],
+                "worst_parameter_max_abs": worst[0],
+                "input_grad_max_abs": float(
+                    (candidate_input - reference_input).abs().max()
+                ),
+            }
+        )
+    except Exception as exc:  # a measurement that cannot be taken is reported as such
+        backward["error"] = f"{type(exc).__name__}: {exc}"
+    report.metadata["backward_measured"] = backward
+
     if args.measure:
         report.metadata["mode"] = "measurement"
         report.metadata["note"] = (
@@ -318,6 +385,10 @@ def _certify_cuda_reference(args: argparse.Namespace, fixture: Any, env: Any) ->
         )
 
     print(report.summary())
+    print("\ngradients, measured and not gated:")
+    for key, value in report.metadata["backward_measured"].items():
+        if key != "note":
+            print(f"  {key}: {value}")
     print("\nbfloat16, measured and not gated:")
     for name, values in measured.items():
         if name == "note":
