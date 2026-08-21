@@ -11,6 +11,40 @@ versioning follows the scheme in the project brief:
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-08-21
+
+The last provisional claim in the package is settled.
+
+### Certified
+
+* Gradients of `cuda-reference` are compared against `torch-reference` on every
+  certification and **scored**, under the new `cuda_float32_backward` class.
+  Measured on an A100 and an H100: the worst parameter, `in_proj.weight`,
+  deviates by 3.03e-02 against gradients whose magnitude is 88.67 -- **0.034%**
+  -- and the input gradient by 6.48e-03 against 10.45, **0.062%**. Both are
+  below one TF32 epsilon, which is the arithmetic the hardware performs. The
+  kernels differentiate as accurately as they compute.
+* `backward` becomes `true` and `training` becomes `true` on `torch-reference`
+  and `cuda-reference`. That was the condition `Capability` stated for itself,
+  and it is now met.
+  What it claims is bounded, and the docstring says so: gradients agree with
+  upstream's kernels to better than a TF32 epsilon on the certified fixture. No
+  model has been trained end to end through this package, and `true` here does
+  not claim one has.
+* MLX stays `backward: false`. It has no backward path here, and certification
+  does not invent one.
+
+### Fixed
+
+* The gradient cotangent is seeded. The first measurement used an unseeded one:
+  the numbers were real but no second run could reproduce them, which is no
+  basis for sealing a band.
+* Reports record the reference gradient magnitudes beside the deviations. The
+  first measurement came back as 3.03e-02 and could not be read at all --
+  nothing said whether those gradients were of order one or of order a hundred.
+  A report has to stand on its own.
+
+
 ## [0.1.2] — 2026-08-21
 
 Three claims brought in line with the evidence behind them.

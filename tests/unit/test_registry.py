@@ -147,14 +147,24 @@ def test_mlx_is_certified_for_what_it_actually_does():
     )
 
 
-def test_no_backend_claims_training():
-    """training=True requires a gradient comparison against CUDA that has not
-    happened yet. Every backend must say so."""
+def test_every_training_claim_is_backed_by_a_sealed_comparison():
+    """`training=True` requires the gradient comparison against CUDA to exist.
+
+    It does now -- scored under `cuda_float32_backward` on every certification,
+    passing on an A100 and an H100 -- so the two torch backends may say so. MLX
+    may not: it has no backward path here at all.
+    """
+    from niverel_mamba.certification.tolerances import load_tolerances
     from niverel_mamba.registry import BACKENDS
 
-    for spec in BACKENDS.values():
-        assert spec.capability.training is False
-        assert spec.capability.inference is True
+    sealed = load_tolerances()["cuda_float32_backward"].observed is not None
+    for name, spec in BACKENDS.items():
+        if not spec.capability.training:
+            continue
+        assert sealed, f"{name} claims training with no sealed gradient comparison"
+        assert spec.capability.backward is True, (
+            f"{name} claims training while backward is {spec.capability.backward!r}"
+        )
 
 
 def test_all_backends_are_listed():

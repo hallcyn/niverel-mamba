@@ -47,9 +47,15 @@ class Capability:
     """What a backend can honestly claim to do."""
 
     inference: bool = True
-    #: ``"experimental"`` until gradients have been compared against CUDA.
+    #: ``"experimental"`` until gradients have been compared against CUDA. That
+    #: comparison now runs on every certification and is scored against
+    #: ``cuda_float32_backward``, so a backend that passes it may say ``True``.
     backward: bool | str = "experimental"
-    #: Only ever ``True`` once the gradient comparison exists.
+    #: Only ever ``True`` once the gradient comparison exists. It does now, and
+    #: what it establishes is bounded: gradients agree with upstream's kernels
+    #: to better than a TF32 epsilon on the certified fixture. No model has been
+    #: trained end to end through this package, and ``True`` here does not claim
+    #: one has.
     training: bool = False
 
     def to_dict(self) -> dict[str, Any]:
