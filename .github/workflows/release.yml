@@ -80,9 +80,54 @@ jobs:
       - uses: actions/upload-artifact@v7
         with: { name: dist, path: dist/ }
 
-  build-cuda:
+  resolve-wheels:
+    # Reuse wheels rather than rebuild them, when the inputs that decide what
+    # they contain are unchanged: the Dockerfiles, the target matrix, and the
+    # pinned upstream versions. A release that only touches this package's own
+    # code otherwise spends seventy minutes per runtime producing a byte-for-byte
+    # equivalent artefact.
+    #
+    # This is what makes a plain `git push origin v0.1.1` do the right thing: a
+    # tag push cannot pass `wheel_run_id`, so without it every tag rebuilt
+    # everything and the only way to avoid that was to cancel the run the tag had
+    # just started and dispatch a second one by hand.
+    #
+    # It fails safe towards building. Any doubt returns nothing, and nothing
+    # means build.
     needs: build-core
-    if: ${{ !cancelled() && !inputs.publish_only && !inputs.wheel_run_id && needs.build-core.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.publish_only && needs.build-core.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.resolve.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPLICIT: ${{ inputs.wheel_run_id }}
+        run: |
+          set -euo pipefail
+          if [ -n "${EXPLICIT}" ]; then
+            echo "nominated explicitly: ${EXPLICIT}"
+            echo "run_id=${EXPLICIT}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          targets=$(python3 -c "
+          import json
+          print(','.join(t['name'] for t in json.load(open('.github/cuda-targets.json'))['targets']))")
+          python3 scripts/find_reusable_wheels.py \
+            --repo "${{ github.repository }}" \
+            --ref "${{ github.sha }}" \
+            --targets "$targets"
+
+  build-cuda:
+    needs: resolve-wheels
+    if: ${{ !cancelled() && !inputs.publish_only && needs.resolve-wheels.result == 'success' && needs.resolve-wheels.outputs.run_id == '' }}
     uses: ./.github/workflows/build-cuda-wheels.yml
     permissions:
       contents: read
@@ -94,7 +139,7 @@ jobs:
     secrets: inherit
 
   certify-sm80:
-    needs: build-cuda
+    needs: [resolve-wheels, build-cuda]
     if: ${{ !cancelled() && !inputs.publish_only && needs.build-cuda.result != 'failure' && needs.build-cuda.result != 'cancelled' }}
     uses: ./.github/workflows/certify-cuda.yml
     permissions:
@@ -102,7 +147,7 @@ jobs:
       actions: read
     with:
       arch: sm80
-      wheel_run_id: ${{ inputs.wheel_run_id }}
+      wheel_run_id: ${{ needs.resolve-wheels.outputs.run_id }}
       measure_only: ${{ inputs.measure_only == true }}
     secrets: inherit
 
@@ -110,7 +155,7 @@ jobs:
     # Deliberately after sm80 rather than beside it: two GPUs billing at once
     # for no gain, and if sm80 already found a regression there is nothing to
     # learn from paying for an H100 to find the same one.
-    needs: certify-sm80
+    needs: [resolve-wheels, certify-sm80]
     if: ${{ !cancelled() && !inputs.publish_only && needs.certify-sm80.result != 'failure' && needs.certify-sm80.result != 'cancelled' }}
     uses: ./.github/workflows/certify-cuda.yml
     permissions:
@@ -118,12 +163,12 @@ jobs:
       actions: read
     with:
       arch: sm90
-      wheel_run_id: ${{ inputs.wheel_run_id }}
+      wheel_run_id: ${{ needs.resolve-wheels.outputs.run_id }}
       measure_only: ${{ inputs.measure_only == true }}
     secrets: inherit
 
   github-release:
-    needs: [build-core, build-cuda, certify-sm80, certify-sm90]
+    needs: [build-core, resolve-wheels, build-cuda, certify-sm80, certify-sm90]
     if: ${{ !cancelled() && !inputs.publish_only && !inputs.certify_only && needs.certify-sm90.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
@@ -148,7 +193,7 @@ jobs:
         with:
           # From the run that built them when one is nominated, so a release
           # that reuses wheels attaches the very wheels that were certified.
-          run-id: ${{ inputs.wheel_run_id || github.run_id }}
+          run-id: ${{ needs.resolve-wheels.outputs.run_id || github.run_id }}
           github-token: ${{ github.token }}
           pattern: cuda-wheels-*
           path: cuda-wheels

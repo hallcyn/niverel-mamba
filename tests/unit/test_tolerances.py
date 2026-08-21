@@ -33,15 +33,40 @@ def test_starting_values_were_not_loosened():
         assert tol.rtol <= rtol, f"{name} rtol was widened beyond the brief's value"
 
 
-def test_cuda_class_is_still_unverified():
-    """No NVIDIA GPU was available, so cuda_bfloat16 has no observed data.
+def test_the_cuda_gate_admits_what_was_actually_measured():
+    """A band must never be tightened below the evidence it was sealed from.
 
-    This is why cuda-reference ships as experimental. When certify-cuda-sm80
-    fills in the observed block, this test is the reminder to revisit the
-    backend's published status.
+    `cuda_float32` was set from release run 32455074823: max_abs 2.4972e-03 on
+    an A100 and an H100, bit-identical across both. Tightening it under that
+    would fail a backend that has not changed, which is the same mistake as
+    setting it from a guess -- three certification runs were lost that way.
     """
+    tolerance = load_tolerances()["cuda_float32"]
+    observed = tolerance.observed
+    assert observed, "the gate must carry its measurement"
+
+    worst = max(
+        float(value)
+        for key, value in observed.items()
+        if key.endswith("max_abs")
+    )
+    # The reference values are of order one, so atol carries the comparison.
+    assert tolerance.atol > worst, (
+        f"the band ({tolerance.atol}) is below the measurement ({worst}); "
+        "it would fail an unchanged backend"
+    )
+    assert tolerance.atol < 10 * worst, (
+        f"the band ({tolerance.atol}) is more than ten times the measurement "
+        f"({worst}); that is no longer a criterion"
+    )
+
+
+def test_bfloat16_is_recorded_as_a_measurement_and_not_as_a_gate():
+    """It measures the number format, not the kernels, and must never gate again."""
     table = load_tolerances()
-    assert "cuda_bfloat16" in table.unverified
+    observed = table["cuda_bfloat16"].observed
+    assert observed, "what bfloat16 costs must stay recorded"
+    assert "NOT A GATE" in table["cuda_bfloat16"].description
 
 
 def test_locally_measured_classes_are_verified():

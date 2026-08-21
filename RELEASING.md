@@ -133,16 +133,26 @@ Two costs dominate a release: three CUDA builds at roughly seventy minutes each,
 and two GPU certifications at about two dollars a run. Neither should be paid
 for a change that cannot affect the result.
 
-**Reusing wheels.** The CUDA wheels are upstream's, at pinned versions, built
-from unchanged Dockerfiles. A release that only changes this package's own code
-produces identical wheels, so nominate the run that already built them:
+**Reusing wheels, automatically.** The CUDA wheels are upstream's, at pinned
+versions, built from Dockerfiles that change rarely. A release that only changes
+this package's own code produces identical wheels, so `resolve-wheels` looks for
+a run that already built them from the same inputs -- the Dockerfiles, the
+target matrix, and the pinned upstream versions, each read at both commits
+through the API and compared by blob SHA.
+
+Nothing to pass, and nothing to remember:
 
 ```console
-$ gh workflow run release.yml -f tag=v0.1.1 -f wheel_run_id=32304273715
+$ git tag -a v0.1.1 -m "niverel-mamba 0.1.1" && git push origin v0.1.1
 ```
 
-`build-cuda` is skipped, and both the certification and the release read their
-wheels from that run -- so the wheels attached are the wheels certified.
+`build-cuda` is skipped when a match is found, and the certification and the
+release both read from the resolved run, so the wheels attached are the wheels
+certified. It fails safe towards building: a changed Dockerfile, an expired
+artifact, a missing target, an API that will not answer -- any of these and the
+wheels are rebuilt.
+
+`-f wheel_run_id=<id>` still overrides the search when you want a specific run.
 
 **Producing evidence without releasing.** To certify a tag that is already
 published -- as v0.1.0 needed, having shipped without any CUDA report:
