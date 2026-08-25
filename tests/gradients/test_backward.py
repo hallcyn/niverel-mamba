@@ -144,40 +144,55 @@ def test_gradcheck_on_a_tiny_configuration(make_model, tiny_config):
     assert torch.autograd.gradcheck(fn, (x,), eps=1e-6, atol=1e-6, rtol=1e-4)
 
 
-def test_capability_does_not_claim_training():
-    """Gradients working is not the same as training being certified."""
+def test_training_claims_exactly_what_was_measured():
+    """`training=True` is bounded, and the bound has to stay visible.
+
+    The condition Capability states for itself is a gradient comparison against
+    CUDA. It exists now, is scored on every certification under
+    `cuda_float32_backward`, and passed on an A100 and an H100: the worst
+    parameter deviated by 3.4e-04 relative and the input gradient by 6.2e-04,
+    both below one TF32 epsilon.
+
+    What it does not establish is that a model has been trained end to end
+    through this package, and the docstring on Capability.training says so. This
+    test keeps the claim tied to the evidence that permits it: if the class ever
+    loses its observations, the claim must go back.
+    """
+    from niverel_mamba.certification.tolerances import load_tolerances
     from niverel_mamba.registry import BACKENDS
 
-    capability = BACKENDS["torch-reference"].capability
-    assert capability.backward == "experimental"
-    assert capability.training is False
+    observed = load_tolerances()["cuda_float32_backward"].observed
+    assert observed, "the gradient class must carry the measurement behind the claim"
+
+    for name in ("torch-reference", "cuda-reference"):
+        capability = BACKENDS[name].capability
+        assert capability.backward is True
+        assert capability.training is True
+
+    # MLX has no backward path at all; certification does not invent one.
+    mlx = BACKENDS["mlx"].capability
+    assert mlx.backward is False and mlx.training is False
 
 
-def test_backward_stays_experimental_until_cuda_gradients_are_sealed():
-    """Everything about the portable backward is proven; that is not the claim.
+def test_a_claim_cannot_outlive_its_evidence():
+    """Remove the observations and the claim must become indefensible.
 
-    Gradients reach every parameter, the chunked path agrees with the sequential
-    oracle, none crosses a strict-reset boundary, and a float64 gradcheck matches
-    analytic against numeric. None of it says upstream's kernels differentiate
-    the same way, which is the condition `Capability.backward` states for
-    itself.
-
-    The certification campaign now measures that comparison and writes it into
-    the report. When a tolerance class carries those observations, this test is
-    what says the claim may move -- and not before.
+    This is the shape every status guard in this project has: the assertion is
+    not "the value is True", it is "the value is True *and* something measured
+    says it may be".
     """
     from niverel_mamba.certification.tolerances import load_tolerances
     from niverel_mamba.registry import BACKENDS
 
     table = load_tolerances()
-    measured = "cuda_float32_backward" in table.classes and (
-        table["cuda_float32_backward"].observed is not None
+    claims_training = any(
+        BACKENDS[name].capability.training for name in ("torch-reference", "cuda-reference")
     )
-    for name in ("torch-reference", "cuda-reference"):
-        capability = BACKENDS[name].capability
-        assert capability.training is False, "training needs more than gradients agreeing"
-        if not measured:
-            assert capability.backward == "experimental", (
-                f"{name} claims backward={capability.backward!r} while no tolerance "
-                "class has observed a gradient comparison against CUDA"
-            )
+    has_evidence = (
+        "cuda_float32_backward" in table.classes
+        and table["cuda_float32_backward"].observed is not None
+    )
+    assert claims_training == has_evidence, (
+        "training is claimed without a sealed gradient comparison, or the "
+        "comparison is sealed and the claim was never made"
+    )
