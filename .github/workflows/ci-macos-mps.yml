@@ -44,7 +44,7 @@ jobs:
       TORCH_VERSION: "2.13.0"
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.3.2
         with:
           enable-cache: true
       - run: |
@@ -90,7 +90,7 @@ jobs:
     runs-on: [self-hosted, macos, arm64]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.3.2
       - run: |
           uv venv --python 3.12
           uv pip install -e ".[torch,dev]"
